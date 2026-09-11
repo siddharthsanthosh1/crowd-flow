@@ -14,6 +14,7 @@ import {
   saveZone,
   saveZoneOrder,
 } from '../lib/admin'
+import { createDemoEvent } from '../lib/demo'
 import { newId } from '../lib/ids'
 import { rememberEvent, rememberedEvents } from '../lib/localEvents'
 import { adminUrl, dashboardUrl, printUrl, volunteerUrl } from '../lib/urls'
@@ -89,6 +90,21 @@ export function AdminHome() {
             Create event
           </button>
         </div>
+      </section>
+
+      <section className="mb-8 rounded-xl border border-neutral-800 p-4">
+        <h2 className="mb-1 font-semibold">Demo event</h2>
+        <p className="mb-3 text-sm text-neutral-400">
+          Four zones and four checkpoints matching a plausible park layout, ready to hand
+          someone a phone.
+        </p>
+        <button
+          disabled={busy}
+          onClick={() => run(() => createDemoEvent(uid), 'Demo — Morrisville Diwali Festival')}
+          className={btnPlain}
+        >
+          Create demo event
+        </button>
       </section>
 
       {error && <p className="mb-6 text-red-400">{error}</p>}
