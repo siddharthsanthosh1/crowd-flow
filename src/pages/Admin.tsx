@@ -1,25 +1,31 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../lib/useAuth'
-import { useEventConfig } from '../lib/data'
+import { useActions, useEventConfig, useSiteMap } from '../lib/data'
 import { useAdminAccess, rememberSecret } from '../lib/useAdminAccess'
 import {
+  archiveAction,
   archiveCheckpoint,
   archiveZone,
   createEvent,
   duplicateEvent,
   saveCheckpoint,
   saveCheckpointOrder,
+  saveAction,
   saveEventMeta,
+  saveSiteMap,
   saveZone,
   saveZoneOrder,
+  saveZonePosition,
 } from '../lib/admin'
 import { createDemoEvent } from '../lib/demo'
 import { newId } from '../lib/ids'
 import { rememberEvent, rememberedEvents } from '../lib/localEvents'
 import { adminUrl, dashboardUrl, printUrl, volunteerUrl } from '../lib/urls'
 import { OUTSIDE } from '../types'
-import type { Checkpoint, Zone } from '../types'
+import { imageToDataUrl } from '../lib/imageResize'
+import { SiteMap } from '../components/SiteMap'
+import type { Checkpoint, SuggestedAction, Zone } from '../types'
 import { Screen } from '../components/Screen'
 
 const input =
@@ -173,6 +179,8 @@ export function AdminEvent() {
       <EventMetaEditor eventId={eventId!} name={event.name} date={event.date} venue={event.venue} />
       <ZonesEditor eventId={eventId!} zones={zones} />
       <CheckpointsEditor eventId={eventId!} zones={zones} checkpoints={checkpoints} />
+      <SiteMapEditor eventId={eventId!} uid={uid} zones={zones} />
+      <ActionsEditor eventId={eventId!} uid={uid} zones={zones} />
       <LinksSection eventId={eventId!} checkpoints={checkpoints} />
       <SecretSection eventId={eventId!} />
       <DuplicateSection eventId={eventId!} event={event} zones={zones} checkpoints={checkpoints} uid={uid} />
@@ -415,6 +423,173 @@ function LinksSection({
           ))}
         </div>
       </details>
+    </Section>
+  )
+}
+
+/**
+ * Upload a site map and place each zone on it by tapping. Stored as a shrunken
+ * data URL in its own document, so no Cloud Storage bucket is involved.
+ */
+function SiteMapEditor({
+  eventId,
+  uid,
+  zones,
+}: {
+  eventId: string
+  uid: string
+  zones: Zone[]
+}) {
+  const { siteMap } = useSiteMap(eventId, uid)
+  const [placing, setPlacing] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const upload = async (file: File | undefined) => {
+    if (!file) return
+    setBusy(true)
+    setError(null)
+    try {
+      await saveSiteMap(eventId, await imageToDataUrl(file))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not use that image')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section title="Site map">
+      <p className="mb-3 text-sm text-neutral-400">
+        Optional. Upload a picture of the park layout, then tap a zone below and tap the map
+        to place it. The dashboard draws each zone as a circle sized by how full it is.
+      </p>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => upload(e.target.files?.[0])}
+      />
+      <button disabled={busy} className={btnPlain} onClick={() => fileRef.current?.click()}>
+        {busy ? 'Working…' : siteMap ? 'Replace map' : 'Upload map'}
+      </button>
+      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+
+      {siteMap && (
+        <>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {zones.map((z) => (
+              <button
+                key={z.id}
+                onClick={() => setPlacing(placing === z.id ? null : z.id)}
+                className={`${btn} text-sm ${
+                  placing === z.id ? 'bg-emerald-600 text-white' : 'bg-neutral-800 text-neutral-200'
+                }`}
+              >
+                {z.mapX === undefined ? 'Place' : 'Move'} {z.name}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 mb-2 text-xs text-neutral-500">
+            {placing
+              ? 'Now tap the spot on the map.'
+              : 'Pick a zone above, then tap the map.'}
+          </p>
+          <SiteMap
+            imageUrl={siteMap}
+            zones={zones}
+            occupancy={new Map(zones.map((z) => [z.id, 0]))}
+            placingZoneId={placing}
+            onPlace={(x, y) => {
+              if (!placing) return
+              saveZonePosition(eventId, placing, x, y).catch(console.error)
+              setPlacing(null)
+            }}
+          />
+        </>
+      )}
+    </Section>
+  )
+}
+
+/** "When Food Court is over 85%, show: open the second queue lane." */
+function ActionsEditor({
+  eventId,
+  uid,
+  zones,
+}: {
+  eventId: string
+  uid: string
+  zones: Zone[]
+}) {
+  const { actions } = useActions(eventId, uid)
+
+  const add = () =>
+    saveAction(eventId, {
+      id: newId(),
+      zoneId: zones[0]?.id ?? '',
+      thresholdPct: 85,
+      text: 'Open the overflow area',
+      order: actions.length,
+    }).catch(console.error)
+
+  return (
+    <Section title="Suggested actions">
+      <p className="mb-3 text-sm text-neutral-400">
+        Shown on the dashboard alert when a zone passes the threshold, so whoever is holding
+        the tablet does not have to decide what to do in the moment.
+      </p>
+      <div className="grid gap-2">
+        {actions.map((a: SuggestedAction) => (
+          <div key={a.id} className="grid gap-2 rounded-lg border border-neutral-800 p-3">
+            <div className="flex items-center gap-2">
+              <select
+                className={input}
+                value={a.zoneId}
+                onChange={(e) => saveAction(eventId, { ...a, zoneId: e.target.value })}
+              >
+                {zones.map((z) => (
+                  <option key={z.id} value={z.id}>
+                    {z.name}
+                  </option>
+                ))}
+              </select>
+              <span className="shrink-0 text-sm text-neutral-400">over</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                className={`${input} w-20`}
+                defaultValue={a.thresholdPct}
+                onBlur={(e) =>
+                  saveAction(eventId, {
+                    ...a,
+                    thresholdPct: Math.min(100, Math.max(1, Math.round(Number(e.target.value) || 85))),
+                  })
+                }
+              />
+              <span className="shrink-0 text-sm text-neutral-400">%</span>
+            </div>
+            <input
+              className={input}
+              defaultValue={a.text}
+              onBlur={(e) => saveAction(eventId, { ...a, text: e.target.value })}
+            />
+            <button
+              className={`${btn} bg-red-900 text-red-200`}
+              onClick={() => archiveAction(eventId, a.id).catch(console.error)}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+      <button onClick={add} className={`${btnPlain} mt-3`} disabled={zones.length === 0}>
+        Add action
+      </button>
     </Section>
   )
 }
