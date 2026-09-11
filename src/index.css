@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+/* Outdoors, at night, in one hand. Dark by default, no hover affordances. */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: #0a0a0a;
+  color: #f5f5f5;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+/* Volunteers tap fast and repeatedly; never let the browser select text or
+   fire a double-tap zoom on the big buttons. */
+button {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+@media print {
+  html, body, #root { background: #fff; color: #000; height: auto; }
+  .no-print { display: none !important; }
+  .print-page { page-break-after: always; }
+}
+
+@page {
+  size: letter portrait;
+  margin: 0.5in;
+}

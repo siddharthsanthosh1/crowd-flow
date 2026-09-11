@@ -1,0 +1,153 @@
+rules_version = '2';
+
+// CrowdFlow security rules.
+//
+// Threat model for a pilot: the event id and checkpoint tokens are unguessable
+// UUIDs printed on QR cards. Anyone holding a card can count. Anyone who does
+// NOT hold a card cannot find the event at all, because ids are never listable.
+//
+// Known limitations, documented in the README:
+//   * Any volunteer who has the event id can write taps for any checkpoint in
+//     that event. We do not verify the checkpoint token in rules (it would cost
+//     an extra document read on every tap).
+//   * The admin secret is brute-forceable. There is no rate limiting without a
+//     server, and this project deliberately has no server.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // The admin secret lives in events/{id}/private/admin, which no client can
+    // read. Admins prove knowledge of it once (see the claim rule below) and
+    // their anonymous uid is recorded; after that they are recognised by uid.
+    function isAdmin(eventId) {
+      return signedIn()
+        && request.auth.uid in get(
+             /databases/$(database)/documents/events/$(eventId)/private/admin
+           ).data.adminUids;
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    match /events/{eventId} {
+      // Readable by anyone holding the event id. Never listable: without the id
+      // there is no way to discover that this event exists.
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn();
+      allow update: if isAdmin(eventId);
+      allow delete: if false;
+
+      // ---- admin secret -------------------------------------------------
+      match /private/admin {
+        // No client ever reads this document. Rules read it server-side.
+        allow read: if false;
+
+        // Created in the same batch as the event itself, by whoever creates it.
+        allow create: if signedIn()
+          && request.auth.uid in request.resource.data.adminUids;
+
+        // Claiming admin on a second device: the client must SEND the secret as
+        // `claimSecret`. It cannot read the stored one, so a correct value is
+        // proof of knowledge. Only adminUids and claimSecret may change, so the
+        // stored secret can never be overwritten this way.
+        allow update: if isAdmin(eventId)
+          || (signedIn()
+              && request.resource.data.claimSecret == resource.data.secret
+              && changedKeys().hasOnly(['adminUids', 'claimSecret'])
+              && request.auth.uid in request.resource.data.adminUids);
+
+        allow delete: if false;
+      }
+
+      // ---- zones, checkpoints -------------------------------------------
+      match /zones/{zoneId} {
+        allow read: if signedIn();
+        allow create, update: if isAdmin(eventId);
+        allow delete: if false;
+      }
+
+      match /checkpoints/{checkpointId} {
+        allow read: if signedIn();
+        allow create, update: if isAdmin(eventId);
+        allow delete: if false;
+      }
+
+      // ---- taps: the append-only log ------------------------------------
+      function validTap() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(
+                 ['checkpointId', 'direction', 'clientTs', 'serverTs', 'deviceId', 'undone'])
+          && d.keys().hasAll(
+                 ['checkpointId', 'direction', 'clientTs', 'serverTs', 'deviceId', 'undone'])
+          && d.checkpointId is string
+          && d.direction in ['in', 'out']
+          && d.undone == false
+          // deviceId is the anonymous auth uid, so a device can only write as itself.
+          && d.deviceId == request.auth.uid
+          && d.clientTs is timestamp
+          // One-sided window. A tap made offline and synced 20 minutes later is
+          // still valid - that is the entire point of the app. We only reject
+          // future-dated and absurdly old timestamps.
+          && d.clientTs <= request.time + duration.value(10, 'm')
+          && d.clientTs >= request.time - duration.value(24, 'h')
+          && d.serverTs == request.time;
+      }
+
+      match /taps/{tapId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && validTap();
+        // Undo is a soft delete. Only the device that wrote the tap may undo it,
+        // only the `undone` field may change, and only ever false -> true.
+        // The 60-second undo window is enforced in the UI; rules use a wide
+        // bound so an undo made offline still syncs later.
+        allow update: if signedIn()
+          && resource.data.deviceId == request.auth.uid
+          && changedKeys().hasOnly(['undone'])
+          && request.resource.data.undone == true
+          && request.time < resource.data.clientTs + duration.value(24, 'h');
+        allow delete: if false;
+      }
+
+      // ---- flags ---------------------------------------------------------
+      function validFlag() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(
+                 ['checkpointId', 'type', 'clientTs', 'serverTs', 'acknowledged'])
+          && d.keys().hasAll(
+                 ['checkpointId', 'type', 'clientTs', 'serverTs', 'acknowledged'])
+          && d.checkpointId is string
+          && d.type in ['long_line', 'hazard', 'needs_staff', 'medical']
+          && d.acknowledged == false
+          && d.clientTs is timestamp
+          && d.clientTs <= request.time + duration.value(10, 'm')
+          && d.clientTs >= request.time - duration.value(24, 'h')
+          && d.serverTs == request.time;
+      }
+
+      match /flags/{flagId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && validFlag();
+        // Acknowledging is an organizer action.
+        allow update: if isAdmin(eventId)
+          && changedKeys().hasOnly(['acknowledged']);
+        allow delete: if false;
+      }
+
+      // ---- resets --------------------------------------------------------
+      match /resets/{resetId} {
+        allow read: if signedIn();
+        allow create: if isAdmin(eventId)
+          && request.resource.data.newCount is int
+          && request.resource.data.newCount >= 0
+          && request.resource.data.ts == request.time;
+        allow update, delete: if false;
+      }
+    }
+  }
+}
