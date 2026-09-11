@@ -95,6 +95,7 @@ export function Vendor() {
       </p>
 
       <ZoneCard
+        showName={false}
         stats={{
           zone,
           occupancy: current,

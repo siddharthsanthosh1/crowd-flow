@@ -2,7 +2,7 @@
  * Checks the analytics pages render cleanly on a phone: charts present, nothing
  * overflowing sideways, no page errors.
  *
- *   npm i -D puppeteer-core && node scripts/phone-check.mjs <eventId> <secret>
+ *   npm i -D puppeteer-core && node scripts/phone-check.mjs <eventId> <secret> [zoneId]
  */
 import puppeteer from 'puppeteer-core'
 import { mkdirSync } from 'fs'
@@ -90,16 +90,21 @@ check('operations log', /operations log/i.test(dash.stats.text))
 check('forecast accuracy section', /forecast accuracy/i.test(dash.stats.text))
 check('peak and dwell on the card', /peak .* at /.test(dash.stats.text), dash.stats.text.match(/peak [^\n]*/)?.[0] ?? '')
 
-const zoneId = await dash.page.evaluate(() => {
-  // Zone ids are not in the DOM; pull one from the vendor link if present.
-  return null
-})
-void zoneId
-
 const report = await open(`/report/${eventId}`, 'report')
 check('report headline stats', /total attendance/i.test(report.stats.text))
 check('report arrival curve', /arrival curve/i.test(report.stats.text))
 check('report forecast table', /forecast accuracy/i.test(report.stats.text))
+
+if (process.argv[4]) {
+  const vendor = await open(`/vendor/${eventId}/${process.argv[4]}`, 'vendor')
+  check('vendor names its zone once', (vendor.stats.text.match(/Food Court/g) ?? []).length <= 1)
+  check('vendor gives a plain-language status', /(Comfortable|Busy|Very busy)/.test(vendor.stats.text))
+  check('vendor looks ahead', /In 15 minutes, expect around/.test(vendor.stats.text))
+  check(
+    'vendor shows no organizer controls',
+    !/Reset|Unacknowledged|Operations log/.test(vendor.stats.text),
+  )
+}
 
 await browser.close()
 console.log(`\nscreenshots in ${SHOTS}`)

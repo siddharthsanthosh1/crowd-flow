@@ -24,10 +24,13 @@ export function ZoneCard({
   stats,
   theme = 'dark',
   compact = false,
+  showName = true,
 }: {
   stats: ZoneStats
   theme?: ChartTheme
   compact?: boolean
+  /** Off on the vendor page, where the zone name is already the page heading. */
+  showName?: boolean
 }) {
   const { zone, occupancy, net10, spark, forecast, minutesToCapacity, peak, dwellMin } = stats
   // With a forecast the card is live and the right edge is "now"; without one
@@ -47,7 +50,9 @@ export function ZoneCard({
   return (
     <div className={`rounded-xl border-2 p-4 ${styles.bg} ${surface}`}>
       <div className="mb-1 flex items-baseline justify-between gap-2">
-        <span className={`truncate text-base font-semibold ${strong}`}>{zone.name}</span>
+        <span className={`truncate text-base font-semibold ${strong}`}>
+          {showName ? zone.name : ''}
+        </span>
         <span className={`shrink-0 text-xl font-bold ${styles.text}`}>{pct}%</span>
       </div>
 
