@@ -27,8 +27,17 @@ export function band(pct: number): Band {
   return 'green'
 }
 
+/**
+ * Cards keep a single near-neutral surface and carry their status on the border
+ * and the text. Three different card backgrounds would mean the sparkline inside
+ * each one sits on a different colour, which makes them harder to compare.
+ */
 export const BAND_STYLES: Record<Band, { bg: string; text: string; dot: string }> = {
-  green: { bg: 'bg-emerald-950 border-emerald-600', text: 'text-emerald-300', dot: 'bg-emerald-400' },
-  yellow: { bg: 'bg-amber-950 border-amber-500', text: 'text-amber-300', dot: 'bg-amber-400' },
-  red: { bg: 'bg-red-950 border-red-500', text: 'text-red-300', dot: 'bg-red-400' },
+  green: { bg: 'border-emerald-600', text: 'text-emerald-300', dot: 'bg-emerald-400' },
+  yellow: { bg: 'border-amber-500', text: 'text-amber-300', dot: 'bg-amber-400' },
+  red: { bg: 'border-red-500', text: 'text-red-300', dot: 'bg-red-400' },
 }
+
+/** "5:42 pm" */
+export const clockLabel = (ms: number) =>
+  new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
