@@ -9,7 +9,16 @@ import {
   where,
 } from 'firebase/firestore'
 import { db } from '../firebase'
-import type { Checkpoint, EventDoc, Flag, Reset, Tap, Zone } from '../types'
+import type {
+  Checkpoint,
+  EventDoc,
+  Flag,
+  Forecast,
+  Reset,
+  SuggestedAction,
+  Tap,
+  Zone,
+} from '../types'
 
 /**
  * Event document, zones, checkpoints and resets. Everything the app needs to
@@ -159,4 +168,59 @@ export function useFlags(eventId: string | undefined, uid: string | null) {
   }, [eventId, uid])
 
   return { flags }
+}
+
+/** Recorded forecasts, so the dashboard can score itself against what happened. */
+export function useForecasts(eventId: string | undefined, uid: string | null) {
+  const [forecasts, setForecasts] = useState<Forecast[]>([])
+
+  useEffect(() => {
+    if (!eventId || !uid) return
+    const q = query(
+      collection(db, 'events', eventId, 'forecasts'),
+      orderBy('targetTime', 'desc'),
+      limit(500),
+    )
+    return onSnapshot(q, (snap) =>
+      setForecasts(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Forecast)),
+    )
+  }, [eventId, uid])
+
+  return { forecasts }
+}
+
+/** "When {zone} is over {n}%, show: {text}" - set up on the admin page. */
+export function useActions(eventId: string | undefined, uid: string | null) {
+  const [actions, setActions] = useState<SuggestedAction[]>([])
+
+  useEffect(() => {
+    if (!eventId || !uid) return
+    const q = query(collection(db, 'events', eventId, 'actions'), orderBy('order'))
+    return onSnapshot(q, (snap) =>
+      setActions(
+        snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }) as SuggestedAction)
+          .filter((a) => !a.archived),
+      ),
+    )
+  }, [eventId, uid])
+
+  return { actions }
+}
+
+/**
+ * The site map image, stored as a data URL in its own document so volunteer
+ * phones - which read the event document - never download it.
+ */
+export function useSiteMap(eventId: string | undefined, uid: string | null) {
+  const [dataUrl, setDataUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!eventId || !uid) return
+    return onSnapshot(doc(db, 'events', eventId, 'map', 'image'), (snap) =>
+      setDataUrl(snap.exists() ? ((snap.data().dataUrl as string) ?? null) : null),
+    )
+  }, [eventId, uid])
+
+  return { siteMap: dataUrl }
 }

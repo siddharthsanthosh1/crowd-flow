@@ -59,6 +59,27 @@ export type Flag = {
   acknowledged: boolean
 }
 
+export type Forecast = {
+  id: string
+  zoneId: string
+  madeAt: Timestamp | null
+  targetTime: Timestamp
+  predictedOccupancy: number
+  horizonMin: number
+  /** Filled in once targetTime has passed and the taps have settled. */
+  actualOccupancy: number | null
+  resolvedAt: Timestamp | null
+}
+
+export type SuggestedAction = {
+  id: string
+  zoneId: string
+  thresholdPct: number
+  text: string
+  order: number
+  archived?: boolean
+}
+
 export type Reset = {
   id: string
   zoneId: string

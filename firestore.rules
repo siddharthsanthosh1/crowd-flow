@@ -139,6 +139,59 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // ---- forecasts -----------------------------------------------------
+      // Written by an organizer's dashboard so the app keeps an honest record of
+      // what it predicted before the outcome was known. Document ids are
+      // deterministic, so two dashboards do not double-log.
+      function validForecast() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(
+                 ['zoneId', 'madeAt', 'targetTime', 'predictedOccupancy',
+                  'horizonMin', 'actualOccupancy', 'resolvedAt'])
+          && d.keys().hasAll(
+                 ['zoneId', 'madeAt', 'targetTime', 'predictedOccupancy',
+                  'horizonMin', 'actualOccupancy', 'resolvedAt'])
+          && d.zoneId is string
+          && d.predictedOccupancy is int && d.predictedOccupancy >= 0
+          && d.horizonMin is int && d.horizonMin > 0 && d.horizonMin <= 60
+          && d.madeAt == request.time
+          && d.targetTime is timestamp
+          && d.targetTime > request.time
+          && d.targetTime <= request.time + duration.value(60, 'm')
+          && d.actualOccupancy == null
+          && d.resolvedAt == null;
+      }
+
+      match /forecasts/{forecastId} {
+        allow read: if signedIn();
+        allow create: if isAdmin(eventId) && validForecast();
+        // Scored exactly once, and only after the fact.
+        allow update: if isAdmin(eventId)
+          && changedKeys().hasOnly(['actualOccupancy', 'resolvedAt'])
+          && resource.data.actualOccupancy == null
+          && request.resource.data.actualOccupancy is int
+          && request.resource.data.actualOccupancy >= 0
+          && request.resource.data.resolvedAt == request.time
+          && request.time > resource.data.targetTime;
+        allow delete: if false;
+      }
+
+      // ---- suggested actions ---------------------------------------------
+      match /actions/{actionId} {
+        allow read: if signedIn();
+        allow create, update: if isAdmin(eventId);
+        allow delete: if false;
+      }
+
+      // ---- site map ------------------------------------------------------
+      // Kept out of the event document on purpose: every volunteer phone reads
+      // the event document, and none of them need to download the map image.
+      match /map/{mapId} {
+        allow read: if signedIn();
+        allow create, update: if isAdmin(eventId);
+        allow delete: if false;
+      }
+
       // ---- resets --------------------------------------------------------
       match /resets/{resetId} {
         allow read: if signedIn();
