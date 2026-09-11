@@ -14,8 +14,14 @@ import type { Checkpoint, EventDoc, Flag, Reset, Tap, Zone } from '../types'
 /**
  * Event document, zones, checkpoints and resets. Everything the app needs to
  * interpret the tap log. All four are small and change rarely.
+ *
+ * Takes `uid` and does nothing until it has one. A listener attached before
+ * anonymous sign-in completes is rejected by the rules, and Firestore does not
+ * retry a permission error - the listener is dead for the life of the page. On
+ * a phone that has never opened the app, that meant a volunteer scanning their
+ * card and getting "Loading..." forever.
  */
-export function useEventConfig(eventId: string | undefined) {
+export function useEventConfig(eventId: string | undefined, uid: string | null) {
   const [event, setEvent] = useState<EventDoc | null>(null)
   const [zones, setZones] = useState<Zone[]>([])
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
@@ -25,7 +31,7 @@ export function useEventConfig(eventId: string | undefined) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!eventId) return
+    if (!eventId || !uid) return
     setLoading(true)
     setNotFound(false)
 
@@ -73,7 +79,7 @@ export function useEventConfig(eventId: string | undefined) {
       unsubCheckpoints()
       unsubResets()
     }
-  }, [eventId])
+  }, [eventId, uid])
 
   return { event, zones, checkpoints, resets, loading, notFound, error }
 }
@@ -83,18 +89,18 @@ export function useEventConfig(eventId: string | undefined) {
  * numbers from this. Ordered by clientTs, which - unlike serverTs - is already
  * set on taps that are still queued offline.
  */
-export function useAllTaps(eventId: string | undefined) {
+export function useAllTaps(eventId: string | undefined, uid: string | null) {
   const [taps, setTaps] = useState<Tap[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!eventId) return
+    if (!eventId || !uid) return
     const q = query(collection(db, 'events', eventId, 'taps'), orderBy('clientTs'))
     return onSnapshot(q, (snap) => {
       setTaps(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Tap))
       setLoading(false)
     })
-  }, [eventId])
+  }, [eventId, uid])
 
   return { taps, loading }
 }
@@ -137,11 +143,11 @@ export function useMyRecentTaps(eventId: string | undefined, deviceId: string | 
 }
 
 /** All flags for the event, newest first. */
-export function useFlags(eventId: string | undefined) {
+export function useFlags(eventId: string | undefined, uid: string | null) {
   const [flags, setFlags] = useState<Flag[]>([])
 
   useEffect(() => {
-    if (!eventId) return
+    if (!eventId || !uid) return
     const q = query(
       collection(db, 'events', eventId, 'flags'),
       orderBy('clientTs', 'desc'),
@@ -150,7 +156,7 @@ export function useFlags(eventId: string | undefined) {
     return onSnapshot(q, (snap) =>
       setFlags(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Flag)),
     )
-  }, [eventId])
+  }, [eventId, uid])
 
   return { flags }
 }

@@ -138,7 +138,7 @@ export function AdminHome() {
 export function AdminEvent() {
   const { eventId } = useParams<{ eventId: string }>()
   const { uid } = useAuth()
-  const { event, zones, checkpoints, loading, notFound } = useEventConfig(eventId)
+  const { event, zones, checkpoints, loading, notFound } = useEventConfig(eventId, uid)
   const { status, error, unlock } = useAdminAccess(eventId, uid)
   const [secretInput, setSecretInput] = useState('')
 

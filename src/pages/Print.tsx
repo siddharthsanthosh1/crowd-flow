@@ -13,7 +13,7 @@ import { Screen } from '../components/Screen'
 export function Print() {
   const { eventId } = useParams<{ eventId: string }>()
   const { uid } = useAuth()
-  const { event, zones, checkpoints, loading, notFound } = useEventConfig(eventId)
+  const { event, zones, checkpoints, loading, notFound } = useEventConfig(eventId, uid)
 
   if (loading || !uid) return <Screen title="Loading…" />
   if (notFound || !event) return <Screen title="Event not found" />

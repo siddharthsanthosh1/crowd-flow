@@ -23,7 +23,7 @@ function buzz(pattern: number | number[]) {
 export function Volunteer() {
   const { eventId, token } = useParams<{ eventId: string; token: string }>()
   const { uid, error: authError } = useAuth()
-  const { event, zones, checkpoints, loading, notFound } = useEventConfig(eventId)
+  const { event, zones, checkpoints, loading, notFound } = useEventConfig(eventId, uid)
   const { taps, pendingCount } = useMyRecentTaps(eventId, uid)
   const now = useNow(1000)
 
@@ -53,8 +53,10 @@ export function Volunteer() {
   }, [taps, checkpoint, now])
 
   const undoTarget = checkpoint ? undoableTap(taps, checkpoint.id, now) : null
+  // The ticking clock can sit a fraction behind the tap's own timestamp, which
+  // would otherwise show "61s" for a moment.
   const undoSecondsLeft = undoTarget
-    ? Math.ceil((UNDO_WINDOW_MS - (now - undoTarget.clientTs.toMillis())) / 1000)
+    ? Math.min(60, Math.max(0, Math.ceil((UNDO_WINDOW_MS - (now - undoTarget.clientTs.toMillis())) / 1000)))
     : 0
 
   if (authError) {

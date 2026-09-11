@@ -42,6 +42,24 @@ events, so an event is undiscoverable without its link.
 
 ## Running the demo
 
+A demo event is already seeded and ready:
+
+| | |
+|---|---|
+| Dashboard | https://crowdcontroldiwali.web.app/dash/0bcdb987fe9045a3b11710bfa45d4eef |
+| QR cards to print | https://crowdcontroldiwali.web.app/print/0bcdb987fe9045a3b11710bfa45d4eef |
+| Admin | https://crowdcontroldiwali.web.app/admin/0bcdb987fe9045a3b11710bfa45d4eef |
+| Admin secret | `9TNW-KVT9-TGVD` |
+
+Volunteer links, if you would rather not print anything for the demo:
+
+- Gate A — Main Entrance: https://crowdcontroldiwali.web.app/count/0bcdb987fe9045a3b11710bfa45d4eef/c22f84a10d9f4f6cbbde7205572b8914
+- Path to Food Court: https://crowdcontroldiwali.web.app/count/0bcdb987fe9045a3b11710bfa45d4eef/bba0270d92b34d9c91a172181b18b66f
+- Stage Entrance: https://crowdcontroldiwali.web.app/count/0bcdb987fe9045a3b11710bfa45d4eef/92eebec77b534d3aa1eedae7840653c6
+- Vendor Row Walkway: https://crowdcontroldiwali.web.app/count/0bcdb987fe9045a3b11710bfa45d4eef/cdbcff7b1ef6445ba1ab3b7da7565f58
+
+To make a fresh one at any time:
+
 1. Open https://crowdcontroldiwali.web.app/admin
 2. Click **Create demo event**. This creates four zones (Main Lawn, Food Court, Stage
    Seating, Vendor Row) and four checkpoints matching a plausible park layout.
@@ -133,8 +151,12 @@ npm install
 npm run dev            # local dev server
 npm test               # unit tests for the counting engine
 npm run build
-npm run verify:rules   # check firestore.rules against the deployed project
+npm run verify:rules   # 30 checks of firestore.rules against the deployed project
 node scripts/simulate-event.mjs 300   # three clients, one offline for 5 minutes
+
+# End-to-end in a real browser. Needs a local Chrome; puppeteer-core is
+# deliberately not a project dependency, so install it only when you want this.
+npm i -D puppeteer-core && node scripts/smoke-test.mjs
 
 firebase deploy --only firestore:rules,firestore:indexes
 firebase deploy --only hosting
@@ -183,9 +205,9 @@ switch.
 it is what makes replay possible later, but it is not how you would build this for a
 20,000-person event.
 
-**A phone needs signal the first time it opens the app.** Anonymous sign-in and the
-app shell have to be fetched once. After that the phone works offline. Have volunteers
-scan their card while they still have service.
+**A phone needs signal the first time it opens the app.** Anonymous sign-in has to
+reach Firebase once. After that the phone works offline. Have
+volunteers scan their card while they still have service.
 
 **Clock skew.** `clientTs` comes from the volunteer's phone. A phone with a badly wrong
 clock will place its taps at the wrong time on the timeline, and taps more than 24

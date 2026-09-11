@@ -32,9 +32,9 @@ const FLAG_LABELS: Record<FlagType, string> = {
 export function Dashboard() {
   const { eventId } = useParams<{ eventId: string }>()
   const { uid } = useAuth()
-  const { event, zones, checkpoints, resets, loading, notFound } = useEventConfig(eventId)
-  const { taps } = useAllTaps(eventId)
-  const { flags } = useFlags(eventId)
+  const { event, zones, checkpoints, resets, loading, notFound } = useEventConfig(eventId, uid)
+  const { taps } = useAllTaps(eventId, uid)
+  const { flags } = useFlags(eventId, uid)
   const { status: adminStatus, error: adminError, unlock } = useAdminAccess(eventId, uid)
   const now = useNow(1000)
 
@@ -157,13 +157,18 @@ function CheckpointRow({
   now: number
   zoneName: (id: string) => string
 }) {
-  const silence = lastTapMs === undefined ? Infinity : now - lastTapMs
+  // A checkpoint that has never reported is amber, not red: before doors open
+  // that is every checkpoint, and it is a "go and look" rather than an alarm.
+  // Red is reserved for a checkpoint that was working and went quiet.
+  const silence = lastTapMs === undefined ? null : now - lastTapMs
   const color =
-    silence >= RED_SILENCE_MS
-      ? 'text-red-400'
-      : silence >= AMBER_SILENCE_MS
-        ? 'text-amber-400'
-        : 'text-emerald-400'
+    silence === null
+      ? 'text-amber-400'
+      : silence >= RED_SILENCE_MS
+        ? 'text-red-400'
+        : silence >= AMBER_SILENCE_MS
+          ? 'text-amber-400'
+          : 'text-emerald-400'
 
   return (
     <div className="flex items-center justify-between gap-3 border-b border-neutral-800 p-3 last:border-b-0">
@@ -174,7 +179,7 @@ function CheckpointRow({
         </div>
       </div>
       <div className={`shrink-0 text-sm font-semibold tabular-nums ${color}`}>
-        {lastTapMs === undefined ? 'no taps yet' : `last tap ${durationLabel(silence)} ago`}
+        {silence === null ? 'no taps yet' : `last tap ${durationLabel(silence)} ago`}
       </div>
     </div>
   )
