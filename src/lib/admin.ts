@@ -8,7 +8,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { newAdminSecret, newId } from './ids'
-import type { Checkpoint, Zone } from '../types'
+import type { Checkpoint, SuggestedAction, Zone } from '../types'
 
 export type EventMeta = { name: string; date: string; venue: string }
 
@@ -147,6 +147,32 @@ export async function duplicateEvent(
 
 export async function acknowledgeFlag(eventId: string, flagId: string): Promise<void> {
   await updateDoc(doc(db, 'events', eventId, 'flags', flagId), { acknowledged: true })
+}
+
+export async function saveSiteMap(eventId: string, dataUrl: string): Promise<void> {
+  await setDoc(doc(db, 'events', eventId, 'map', 'image'), {
+    dataUrl,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/** Where this zone sits on the site map, as a 0-1 fraction of the image. */
+export async function saveZonePosition(
+  eventId: string,
+  zoneId: string,
+  mapX: number,
+  mapY: number,
+): Promise<void> {
+  await updateDoc(doc(db, 'events', eventId, 'zones', zoneId), { mapX, mapY })
+}
+
+export async function saveAction(eventId: string, action: SuggestedAction): Promise<void> {
+  const { id, ...rest } = action
+  await setDoc(doc(db, 'events', eventId, 'actions', id), rest, { merge: true })
+}
+
+export async function archiveAction(eventId: string, actionId: string): Promise<void> {
+  await updateDoc(doc(db, 'events', eventId, 'actions', actionId), { archived: true })
 }
 
 export async function resetZone(
