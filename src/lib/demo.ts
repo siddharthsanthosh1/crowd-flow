@@ -31,18 +31,23 @@ export async function createDemoEvent(
   const zoneIds = new Map(DEMO_ZONES.map((z) => [z.key, newId()]))
   const zoneId = (key: string) => (key === OUTSIDE ? OUTSIDE : zoneIds.get(key)!)
 
-  const batch = writeBatch(db)
-  batch.set(doc(db, 'events', eventId), {
+  // Two commits, not one. Zone and checkpoint writes are authorised by a rules
+  // get() on private/admin, and inside a single batch that document does not
+  // exist yet, so the whole batch would be denied.
+  const bootstrap = writeBatch(db)
+  bootstrap.set(doc(db, 'events', eventId), {
     name,
     date: '2026-10-17',
     venue: 'Morrisville Community Park',
     createdAt: serverTimestamp(),
   })
-  batch.set(doc(db, 'events', eventId, 'private', 'admin'), {
+  bootstrap.set(doc(db, 'events', eventId, 'private', 'admin'), {
     secret,
     adminUids: [uid],
   })
+  await bootstrap.commit()
 
+  const batch = writeBatch(db)
   DEMO_ZONES.forEach((z, i) => {
     batch.set(doc(db, 'events', eventId, 'zones', zoneId(z.key)), {
       name: z.name,

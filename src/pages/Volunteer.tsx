@@ -69,9 +69,15 @@ export function Volunteer() {
     )
   }
   if (loading || !uid) return <Screen title="Loading…" />
-  if (notFound) return <Screen title="Event not found" >
-    <p className="text-lg">Check with the organizer that this card is for today's event.</p>
-  </Screen>
+  if (notFound) {
+    return (
+      <Screen title="Event not found">
+        <p className="text-lg">
+          Check with the organizer that this card is for today's event.
+        </p>
+      </Screen>
+    )
+  }
   if (!checkpoint) {
     return (
       <Screen title="Card not recognised">

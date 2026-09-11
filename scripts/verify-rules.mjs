@@ -19,6 +19,11 @@ import {
   updateDoc,
   writeBatch,
   deleteDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  where,
 } from 'firebase/firestore'
 
 const config = {
@@ -228,6 +233,39 @@ await expect('flag with an invalid type', false, () =>
     serverTs: serverTimestamp(),
     acknowledged: false,
   }),
+)
+
+console.log('\nbootstrap ordering')
+// Zone writes are authorised by a rules get() on private/admin. Inside a single
+// batch that document does not exist yet, so the batch is denied - which is why
+// createEvent, createDemoEvent and duplicateEvent all commit in two steps.
+await expect('creating an event and its first zone in one batch', false, () => {
+  const id = newId()
+  const b = writeBatch(other.db)
+  b.set(doc(other.db, 'events', id), {
+    name: 'x',
+    date: '2026-10-17',
+    venue: 'x',
+    createdAt: serverTimestamp(),
+  })
+  b.set(doc(other.db, 'events', id, 'private', 'admin'), {
+    secret: 'AAAA-BBBB-CCCC',
+    adminUids: [other.uid],
+  })
+  b.set(doc(other.db, 'events', id, 'zones', newId()), { name: 'z', capacity: 1, order: 0 })
+  return b.commit()
+})
+
+console.log('\nindexes')
+await expect("the volunteer screen's own-taps query is indexed", true, () =>
+  getDocs(
+    query(
+      collection(other.db, 'events', eventId, 'taps'),
+      where('deviceId', '==', other.uid),
+      orderBy('clientTs', 'desc'),
+      limit(100),
+    ),
+  ),
 )
 
 console.log(`\n${passed} passed, ${failed} failed`)

@@ -112,13 +112,17 @@ export async function duplicateEvent(
   for (const z of zones) zoneIdMap.set(z.id, newId())
   const mapZone = (id: string) => zoneIdMap.get(id) ?? id // leaves OUTSIDE alone
 
-  const batch = writeBatch(db)
-  batch.set(doc(db, 'events', eventId), { ...meta, createdAt: serverTimestamp() })
-  batch.set(doc(db, 'events', eventId, 'private', 'admin'), {
+  // Two commits, for the same reason as createEvent: the zone writes below are
+  // authorised by a rules get() on private/admin, which must already exist.
+  const bootstrap = writeBatch(db)
+  bootstrap.set(doc(db, 'events', eventId), { ...meta, createdAt: serverTimestamp() })
+  bootstrap.set(doc(db, 'events', eventId, 'private', 'admin'), {
     secret,
     adminUids: [uid],
   })
+  await bootstrap.commit()
 
+  const batch = writeBatch(db)
   zones.forEach((z, i) => {
     batch.set(doc(db, 'events', eventId, 'zones', mapZone(z.id)), {
       name: z.name,

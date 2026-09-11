@@ -12,7 +12,7 @@ import {
 } from '../lib/occupancy'
 import { BAND_STYLES, band, durationLabel, percent, signed } from '../lib/format'
 import { OUTSIDE } from '../types'
-import type { Checkpoint, FlagType, Zone } from '../types'
+import type { Checkpoint, Flag, FlagType, Zone } from '../types'
 import { Screen } from '../components/Screen'
 
 const TREND_WINDOW_MIN = 10
@@ -188,8 +188,8 @@ function Flags({
   canAcknowledge,
   onAcknowledge,
 }: {
-  openFlags: { id: string; checkpointId: string; type: FlagType; clientTs: { toMillis(): number } }[]
-  closedFlags: { id: string; checkpointId: string; type: FlagType; clientTs: { toMillis(): number } }[]
+  openFlags: Flag[]
+  closedFlags: Flag[]
   checkpoints: Checkpoint[]
   now: number
   canAcknowledge: boolean
