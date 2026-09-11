@@ -32,6 +32,8 @@ camera, no names, no device fingerprinting. Only counts and timestamps.
 |---|---|---|
 | Volunteer | `/count/{eventId}/{checkpointToken}` | Scanned from the QR card |
 | Dashboard | `/dash/{eventId}` | Organizer |
+| Vendor | `/vendor/{eventId}/{zoneId}` | One area, read-only, for a food vendor |
+| Report | `/report/{eventId}` | After the event; print-friendly |
 | Admin | `/admin/{eventId}` | Whoever sets the event up |
 | Printable cards | `/print/{eventId}` | Printed the day before |
 
@@ -124,6 +126,54 @@ writes are deliberately never awaited: offline, the write promise does not settl
 until the connection returns, but Firestore has already applied the tap locally, so
 awaiting would freeze the button for as long as the volunteer has no signal.
 
+### Reading the dashboard
+
+The dashboard is analytics-first. Top to bottom:
+
+**Zone cards.** Current occupancy, the last 60 minutes as a sparkline, and the next
+15 minutes projected as a dashed continuation of the same line. The projection is a
+straight line drawn at whatever rate the zone has moved over the last 10 minutes -
+nothing cleverer than that. Peak and an estimated dwell time sit under the chart.
+
+The sparkline scales to its own data rather than to capacity, so the shape of the
+hour stays visible even in a zone that is nowhere near full. The capacity line
+appears once capacity is close enough to matter; until then the percentage above the
+chart tells you where you stand.
+
+**Forecast accuracy.** Every two minutes, each zone's 15-minute forecast is written
+down. Once that moment arrives and the taps have settled, the actual occupancy is
+recorded next to it. The mean absolute error is how many people the forecast is
+typically off by; the bias says whether it runs high or low. **Read the error before
+you trust the forecast.** A straight-line projection does badly at turning points -
+when a performance starts, everyone moves at once and the forecast will be wrong in
+a way it cannot anticipate. The number on screen is what makes that visible instead
+of hidden.
+
+**People on site / arrivals.** Both come from checkpoints that touch OUTSIDE, which
+is the only boundary with the rest of the world and so the only place total
+attendance can be measured.
+
+**Throughput and flow.** People per minute across each checkpoint, and a 15-minute
+in/out/net table. A checkpoint that has gone quiet is drawn in red on the throughput
+chart, because an empty bar there means missing data, not a quiet gate.
+
+**Operations log.** Alerts, flags, resets and scored forecasts on one timeline.
+Alerts are derived from the tap log rather than stored when they fire, so the history
+survives a reload and can be reconstructed for any past moment.
+
+### Site map and suggested actions
+
+Both optional, both set up on the admin page.
+
+Upload a picture of the park, then tap a zone and tap the map to place it. The
+dashboard draws each zone as a circle sized by occupancy, with the number printed
+inside. The image is shrunk and stored in Firestore, so there is no Cloud Storage
+bucket to configure or clean up.
+
+Suggested actions are a small rules table - "when Food Court is over 85%, show: open
+the second queue lane". The text appears on the dashboard alert, so whoever is
+holding the tablet at 7 p.m. does not have to decide what to do on the spot.
+
 ### Security model
 
 Anyone signed in anonymously can create a well-formed tap or flag under an event they
@@ -153,10 +203,16 @@ npm test               # unit tests for the counting engine
 npm run build
 npm run verify:rules   # 30 checks of firestore.rules against the deployed project
 node scripts/simulate-event.mjs 300   # three clients, one offline for 5 minutes
+node scripts/seed-history.mjs         # an event with 90 minutes of realistic taps
 
 # End-to-end in a real browser. Needs a local Chrome; puppeteer-core is
-# deliberately not a project dependency, so install it only when you want this.
-npm i -D puppeteer-core && node scripts/smoke-test.mjs
+# deliberately not a project dependency, so install it only when you want these.
+npm i -D puppeteer-core
+node scripts/smoke-test.mjs                              # Phase 1 flow
+node scripts/phone-check.mjs <eventId> <secret>          # charts on a 390px screen
+node scripts/forecast-loop-check.mjs <eventId> <secret>  # holds the dashboard open
+                                                         # ~20 min and checks that
+                                                         # forecasts got scored
 
 firebase deploy --only firestore:rules,firestore:indexes
 firebase deploy --only hosting
@@ -200,6 +256,34 @@ quota, and each dashboard reads the whole tap log on first load. **Switch the pr
 to the Blaze plan before the event and set a budget alert.** Past the free quota the
 cost is a few cents per event at current pricing — confirm the current rates when you
 switch.
+
+**The forecast is a straight line.** It takes the last 10 minutes of movement and
+extends it. It has no idea that the fireworks start at 7:30. It will be confidently
+wrong at exactly the moments that matter most, which is why the error is measured and
+shown rather than hidden - check the mean absolute error before acting on a
+projection.
+
+**Dwell time is Little's Law, not a measurement.** Occupancy divided by arrival rate
+assumes a zone in steady state. While a zone is filling or emptying quickly the
+number is not meaningful. It is labelled as an estimate everywhere it appears.
+
+**Forecast logging costs writes.** Four zones, one forecast every two minutes, plus a
+second write to score each one: roughly 700 writes across a three-hour event, on top
+of the taps. It only runs on a dashboard that has been unlocked with the admin
+secret.
+
+**Every vendor link reads the whole tap log.** A vendor page computes its zone from
+the same data the dashboard uses. Handing the link to ten vendors means ten more full
+reads of the tap log. Keep vendor links to people who actually need them, and see the
+free-tier note above.
+
+**Site maps must be simple.** The image is shrunk to fit a Firestore document, and a
+very detailed photograph will be rejected with a message asking for a simpler one. A
+flat park diagram is the right input.
+
+**Alerts are detected once a minute.** A zone that crosses 85% and drops back within
+the same minute may not produce a log entry. Peak occupancy is tracked exactly and
+is not affected.
 
 **The dashboard reads every tap for the event.** Fine for one day at this scale, and
 it is what makes replay possible later, but it is not how you would build this for a

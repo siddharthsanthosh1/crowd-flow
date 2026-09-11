@@ -70,6 +70,9 @@ const minutes = (n) => Timestamp.fromMillis(Date.now() + n * 60_000)
 
 const admin = await user('admin')
 const other = await user('other')
+// `other` claims admin part-way through, so anything that must be checked as a
+// plain volunteer after that point uses this third user, which never claims.
+const visitor = await user('visitor')
 
 const eventId = newId()
 const secret = 'TEST-SECR-ET01'
@@ -233,6 +236,94 @@ await expect('flag with an invalid type', false, () =>
     serverTs: serverTimestamp(),
     acknowledged: false,
   }),
+)
+
+console.log('\nforecasts')
+const soon = () => Timestamp.fromMillis(Date.now() + 15_000)
+const forecast = (over = {}) => ({
+  zoneId,
+  madeAt: serverTimestamp(),
+  targetTime: soon(),
+  predictedOccupancy: 120,
+  horizonMin: 1,
+  actualOccupancy: null,
+  resolvedAt: null,
+  ...over,
+})
+
+await expect('a volunteer records a forecast', false, () =>
+  setDoc(doc(visitor.db, 'events', eventId, 'forecasts', newId()), forecast()),
+)
+await expect('a forecast that already knows the answer', false, () =>
+  setDoc(doc(admin.db, 'events', eventId, 'forecasts', newId()), forecast({ actualOccupancy: 100 })),
+)
+await expect('a forecast aimed at the past', false, () =>
+  setDoc(doc(admin.db, 'events', eventId, 'forecasts', newId()), forecast({
+    targetTime: Timestamp.fromMillis(Date.now() - 60_000),
+  })),
+)
+await expect('a forecast aimed two hours out', false, () =>
+  setDoc(doc(admin.db, 'events', eventId, 'forecasts', newId()), forecast({
+    targetTime: Timestamp.fromMillis(Date.now() + 2 * 3600_000),
+  })),
+)
+
+const forecastRef = doc(admin.db, 'events', eventId, 'forecasts', newId())
+await expect('the organizer records a forecast', true, () => setDoc(forecastRef, forecast()))
+await expect('scoring it before the moment it describes', false, () =>
+  updateDoc(forecastRef, { actualOccupancy: 100, resolvedAt: serverTimestamp() }),
+)
+await expect('rewriting what was predicted', false, () =>
+  updateDoc(forecastRef, { predictedOccupancy: 1 }),
+)
+
+console.log('  waiting for the forecast target time to pass…')
+await new Promise((r) => setTimeout(r, 18_000))
+
+await expect('a volunteer scores it', false, () =>
+  updateDoc(doc(visitor.db, 'events', eventId, 'forecasts', forecastRef.id), {
+    actualOccupancy: 100,
+    resolvedAt: serverTimestamp(),
+  }),
+)
+await expect('the organizer scores it once the moment has passed', true, () =>
+  updateDoc(forecastRef, { actualOccupancy: 100, resolvedAt: serverTimestamp() }),
+)
+await expect('scoring it a second time', false, () =>
+  updateDoc(forecastRef, { actualOccupancy: 7, resolvedAt: serverTimestamp() }),
+)
+
+console.log('\nactions and site map')
+await expect('a volunteer writes a suggested action', false, () =>
+  setDoc(doc(visitor.db, 'events', eventId, 'actions', newId()), {
+    zoneId,
+    thresholdPct: 85,
+    text: 'x',
+    order: 0,
+  }),
+)
+await expect('the organizer writes a suggested action', true, () =>
+  setDoc(doc(admin.db, 'events', eventId, 'actions', newId()), {
+    zoneId,
+    thresholdPct: 85,
+    text: 'Open the overflow area',
+    order: 0,
+  }),
+)
+await expect('a volunteer replaces the site map', false, () =>
+  setDoc(doc(visitor.db, 'events', eventId, 'map', 'image'), {
+    dataUrl: 'data:image/jpeg;base64,AAAA',
+    updatedAt: serverTimestamp(),
+  }),
+)
+await expect('the organizer uploads the site map', true, () =>
+  setDoc(doc(admin.db, 'events', eventId, 'map', 'image'), {
+    dataUrl: 'data:image/jpeg;base64,AAAA',
+    updatedAt: serverTimestamp(),
+  }),
+)
+await expect('anyone with the event id can read the site map', true, () =>
+  getDoc(doc(visitor.db, 'events', eventId, 'map', 'image')),
 )
 
 console.log('\nbootstrap ordering')
