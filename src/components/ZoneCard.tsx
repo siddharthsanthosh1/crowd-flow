@@ -30,6 +30,12 @@ export function ZoneCard({
   compact?: boolean
 }) {
   const { zone, occupancy, net10, spark, forecast, minutesToCapacity, peak, dwellMin } = stats
+  // With a forecast the card is live and the right edge is "now"; without one
+  // it is a finished window on the report, where "now" would be a lie and a
+  // time-to-capacity would be meaningless.
+  const live = forecast.length > 0
+  const firstAt = spark.length > 0 ? clockLabel(spark[0].t) : ''
+  const lastAt = spark.length > 0 ? clockLabel(spark[spark.length - 1].t) : ''
   const pct = percent(occupancy, zone.capacity)
   const styles = BAND_STYLES[band(pct)]
   const arrow = net10 > 0 ? '▲' : net10 < 0 ? '▼' : '■'
@@ -59,17 +65,15 @@ export function ZoneCard({
           height={compact ? 64 : 84}
         />
         <div className={`mt-0.5 flex justify-between text-[10px] ${muted}`}>
-          <span>{spark.length > 0 ? clockLabel(spark[0].t) : ''}</span>
-          <span>now</span>
-          <span>
-            {forecast.length > 0 ? `${clockLabel(forecast[forecast.length - 1].t)} (proj.)` : ''}
-          </span>
+          <span>{firstAt}</span>
+          {live && <span>now</span>}
+          <span>{live ? `${clockLabel(forecast[forecast.length - 1].t)} (proj.)` : lastAt}</span>
         </div>
       </div>
 
       <div className={`mt-2 text-sm font-semibold ${styles.text}`}>
         {arrow} {signed(net10)} / 10 min
-        {minutesToCapacity !== null && (
+        {live && minutesToCapacity !== null && (
           <span className="ml-2 font-normal">
             · full in ~{Math.min(60, Math.round(minutesToCapacity))} min
             {minutesToCapacity > 60 ? '+' : ''}
