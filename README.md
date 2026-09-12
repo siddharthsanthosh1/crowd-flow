@@ -26,7 +26,7 @@ gone quiet, because a silent checkpoint means the numbers are wrong.
 There are no accounts. Nothing about any attendee is ever recorded: no GPS, no
 camera, no names, no device fingerprinting. Only counts and timestamps.
 
-## The three screens
+## The screens
 
 | Screen | URL | Who |
 |---|---|---|
@@ -126,6 +126,12 @@ writes are deliberately never awaited: offline, the write promise does not settl
 until the connection returns, but Firestore has already applied the tap locally, so
 awaiting would freeze the button for as long as the volunteer has no signal.
 
+The service worker precaches only what the volunteer screen needs: Firebase, React
+and the volunteer page itself. The organizer pages and their charts are separate
+chunks, cached the first time each one is opened, so a volunteer's phone never
+downloads them. The flip side: open the dashboard, report and vendor pages once with
+signal on each device that will use them.
+
 ### Reading the dashboard
 
 The dashboard is analytics-first. Top to bottom:
@@ -187,9 +193,9 @@ read**. To become an admin on a device you send the secret as `claimSecret`; the
 compare it to the stored one and record your uid. After that you are recognised by
 uid.
 
-`npm run verify:rules` exercises the deployed rules with two separate anonymous users
-— 28 checks covering offline taps, undo ownership, hard-delete refusal, admin gating,
-and privilege escalation. It creates a temporary event and prints the command to
+`npm run verify:rules` exercises the deployed rules with two separate anonymous users,
+covering offline taps, undo ownership, hard-delete refusal, admin gating, forecast
+scoring and privilege escalation. It creates a temporary event and prints the command to
 delete it.
 
 ---
@@ -201,15 +207,18 @@ npm install
 npm run dev            # local dev server
 npm test               # unit tests for the counting engine
 npm run build
-npm run verify:rules   # 30 checks of firestore.rules against the deployed project
+npm run verify:rules   # checks firestore.rules against the deployed project
 node scripts/simulate-event.mjs 300   # three clients, one offline for 5 minutes
 node scripts/seed-history.mjs         # an event with 90 minutes of realistic taps
 
 # End-to-end in a real browser. Needs a local Chrome; puppeteer-core is
-# deliberately not a project dependency, so install it only when you want these.
-npm i -D puppeteer-core
+# deliberately not a project dependency, so install it without saving it.
+npm i --no-save puppeteer-core
 node scripts/smoke-test.mjs                              # Phase 1 flow
-node scripts/phone-check.mjs <eventId> <secret>          # charts on a 390px screen
+node scripts/phone-check.mjs <eventId> <secret> [zoneId] # charts on a 390px screen;
+                                                         # zoneId adds the vendor page.
+                                                         # BASE=http://localhost:4173
+                                                         # checks a local `vite preview`
 node scripts/forecast-loop-check.mjs <eventId> <secret>  # holds the dashboard open
                                                          # ~20 min and checks that
                                                          # forecasts got scored
@@ -310,10 +319,19 @@ the screen.
 
 ## What is not built yet
 
-Phase 2 (by 10 October): forecast and alert banner, reset-zone action, confidence
-indicator, site map with zone positions, suggested-actions table.
+Everything else from the Phase 2 and Phase 3 plans is built and described above: the
+alert banner, reset-zone action, flags, site map, suggested actions, forecast log,
+vendor page and post-event report. Still missing:
 
-Phase 3 (after the event): post-event report, replay scrubber, miscounting detection.
+**Confidence indicator.** Nothing on the dashboard says how far to trust a zone's
+number. Checkpoint health on the throughput chart is the closest thing.
 
-The FLAG button and the dashboard flags panel are Phase 2 items that landed early —
-they are working end to end, so flags raised at the demo are recorded and shown.
+**Replay scrubber.** The time-series engine can rebuild the event at any past moment,
+but there is no control for dragging back through the evening.
+
+**Miscounting detection.** Nothing flags a checkpoint whose counts look wrong.
+Spotting drift and resetting the zone is up to the organizer.
+
+**Vendor links in the app.** The vendor page works, but nothing in the app lists its
+link. Build it by hand as `/vendor/{eventId}/{zoneId}`, where the zone id is the
+zone's document id under `events/{eventId}/zones`.

@@ -2,12 +2,15 @@
  * Checks the analytics pages render cleanly on a phone: charts present, nothing
  * overflowing sideways, no page errors.
  *
- *   npm i -D puppeteer-core && node scripts/phone-check.mjs <eventId> <secret> [zoneId]
+ *   npm i --no-save puppeteer-core && node scripts/phone-check.mjs <eventId> <secret> [zoneId]
+ *
+ * Checks the live site by default. To check a local build instead:
+ *   npm run build && npx vite preview   then   BASE=http://localhost:4173 node scripts/phone-check.mjs ...
  */
 import puppeteer from 'puppeteer-core'
 import { mkdirSync } from 'fs'
 
-const BASE = 'https://crowdcontroldiwali.web.app'
+const BASE = process.env.BASE ?? 'https://crowdcontroldiwali.web.app'
 const [eventId, secret] = process.argv.slice(2)
 const SHOTS = process.env.SHOT_DIR ?? './shots'
 mkdirSync(SHOTS, { recursive: true })
