@@ -40,6 +40,7 @@ export async function createDemoEvent(
     date: '2026-10-17',
     venue: 'Morrisville Community Park',
     createdAt: serverTimestamp(),
+    demo: true,
   })
   bootstrap.set(doc(db, 'events', eventId, 'private', 'admin'), {
     secret,

@@ -10,6 +10,12 @@ export type EventDoc = {
   venue: string
   createdAt?: Timestamp
   siteMapUrl?: string
+  /**
+   * Generated data lives here and nowhere else. The dashboard shows an
+   * unmissable SIMULATED badge whenever this is set, and the simulator refuses
+   * to run without it.
+   */
+  demo?: boolean
 }
 
 export type Zone = {

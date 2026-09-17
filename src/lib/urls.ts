@@ -6,3 +6,8 @@ export const dashboardUrl = (eventId: string) => `${location.origin}/dash/${even
 export const adminUrl = (eventId: string) => `${location.origin}/admin/${eventId}`
 
 export const printUrl = (eventId: string) => `${location.origin}/print/${eventId}`
+
+export const vendorUrl = (eventId: string, zoneId: string) =>
+  `${location.origin}/vendor/${eventId}/${zoneId}`
+
+export const checklistUrl = (eventId: string) => `${location.origin}/admin/${eventId}/checklist`

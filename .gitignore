@@ -26,3 +26,4 @@ dist-ssr
 # Firebase
 .firebase/
 firebase-debug.log
+shots/

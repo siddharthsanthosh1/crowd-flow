@@ -86,12 +86,19 @@ async function open(path, name, { unlock = false } = {}) {
 
 const dash = await open(`/dash/${eventId}`, 'dashboard', { unlock: true })
 check('zone cards present', dash.stats.text.includes('Main Lawn'))
-check('people on site headline', /on site now/i.test(dash.stats.text))
-check('throughput section', /checkpoint throughput/i.test(dash.stats.text))
-check('flow table', /flow, last 15 minutes/i.test(dash.stats.text))
-check('operations log', /operations log/i.test(dash.stats.text))
-check('forecast accuracy section', /forecast accuracy/i.test(dash.stats.text))
-check('peak and dwell on the card', /peak .* at /.test(dash.stats.text), dash.stats.text.match(/peak [^\n]*/)?.[0] ?? '')
+// The summary strip answers three questions in order: how many are here, what
+// is about to be a problem, and whether the numbers can still be trusted.
+check('attendance leads the strip', /attendance so far/i.test(dash.stats.text))
+check('on site now', /on site now/i.test(dash.stats.text))
+check('watch tile', /watch/i.test(dash.stats.text))
+check('forecast accuracy tile', /forecast accuracy/i.test(dash.stats.text))
+check('rate reads per minute', !/\/ 10 min/.test(dash.stats.text))
+check('confidence on every card', /confidence · \d+ min/i.test(dash.stats.text))
+check('checkpoint health is not buried', /checkpoint health/i.test(dash.stats.text))
+// Flow, throughput and the operations log live behind the More drawer now, and
+// the drawer does not mount them until it is opened.
+check('detail is behind More', !/operations log/i.test(dash.stats.text))
+check('no unlock box in the page body', !/enter the admin secret/i.test(dash.stats.text))
 
 const report = await open(`/report/${eventId}`, 'report')
 check('report headline stats', /total attendance/i.test(report.stats.text))
@@ -107,6 +114,7 @@ if (process.argv[4]) {
     'vendor shows no organizer controls',
     !/Reset|Unacknowledged|Operations log/.test(vendor.stats.text),
   )
+  check('vendor still shows peak and dwell', /peak .* at /.test(vendor.stats.text))
 }
 
 await browser.close()

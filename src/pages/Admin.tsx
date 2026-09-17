@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../lib/useAuth'
 import { useActions, useEventConfig, useSiteMap } from '../lib/data'
 import { useAdminAccess, rememberSecret } from '../lib/useAdminAccess'
 import {
   archiveAction,
+  markAsDemo,
   archiveCheckpoint,
   archiveZone,
   createEvent,
@@ -19,9 +20,19 @@ import {
   saveZonePosition,
 } from '../lib/admin'
 import { createDemoEvent } from '../lib/demo'
+import {
+  DEFAULT_SCALE,
+  LIVE_MS,
+  clearSimulation,
+  countLiveTaps,
+  planFestival,
+  runSimulation,
+} from '../lib/simulate'
+import type { SimHandle, SimProgress } from '../lib/simulate'
+import { QR } from '../components/QR'
 import { newId } from '../lib/ids'
 import { rememberEvent, rememberedEvents } from '../lib/localEvents'
-import { adminUrl, dashboardUrl, printUrl, volunteerUrl } from '../lib/urls'
+import { adminUrl, dashboardUrl, printUrl, vendorUrl, volunteerUrl } from '../lib/urls'
 import { OUTSIDE } from '../types'
 import { imageToDataUrl } from '../lib/imageResize'
 import { SiteMap } from '../components/SiteMap'
@@ -174,7 +185,13 @@ export function AdminEvent() {
       <Link to="/admin" className="text-sm text-neutral-400">
         ← All events
       </Link>
-      <h1 className="mt-2 mb-6 text-2xl font-bold">{event.name}</h1>
+      <h1 className="mt-2 mb-3 text-2xl font-bold">{event.name}</h1>
+      <Link
+        to={`/admin/${eventId}/checklist`}
+        className="mb-6 inline-block rounded-lg border border-neutral-700 px-3 py-2 text-sm font-semibold text-neutral-200"
+      >
+        Morning-of checklist →
+      </Link>
 
       <EventMetaEditor eventId={eventId!} name={event.name} date={event.date} venue={event.venue} />
       <ZonesEditor eventId={eventId!} zones={zones} />
@@ -182,6 +199,8 @@ export function AdminEvent() {
       <SiteMapEditor eventId={eventId!} uid={uid} zones={zones} />
       <ActionsEditor eventId={eventId!} uid={uid} zones={zones} />
       <LinksSection eventId={eventId!} checkpoints={checkpoints} />
+      <VendorLinksSection eventId={eventId!} zones={zones} />
+      <SimulatorSection eventId={eventId!} uid={uid} event={event} zones={zones} checkpoints={checkpoints} />
       <SecretSection eventId={eventId!} />
       <DuplicateSection eventId={eventId!} event={event} zones={zones} checkpoints={checkpoints} uid={uid} />
     </div>
@@ -687,6 +706,235 @@ function DuplicateSection({
           Duplicate
         </button>
       </div>
+    </Section>
+  )
+}
+
+/**
+ * One read-only link per area, for the food vendors. They existed before this
+ * section did - they just had to be assembled by hand from a zone's document
+ * id, which is not a thing anyone should have to do on the morning of an event.
+ */
+function VendorLinksSection({ eventId, zones }: { eventId: string; zones: Zone[] }) {
+  const [showing, setShowing] = useState<string | null>(null)
+
+  return (
+    <Section title="Vendor links">
+      <p className="mb-3 text-sm text-neutral-400">
+        A read-only page for one area, safe to hand to a food vendor or a stage manager.
+        It shows how busy their area is and nothing else - no counts for anywhere else, no
+        organizer actions.
+      </p>
+      {zones.length === 0 && <p className="text-sm text-neutral-500">Add a zone first.</p>}
+      <div className="grid gap-3">
+        {zones.map((z) => {
+          const url = vendorUrl(eventId, z.id)
+          return (
+            <div key={z.id} className="rounded-lg border border-neutral-800 p-3">
+              <LinkRow label={z.name} url={url} />
+              <button
+                onClick={() => setShowing(showing === z.id ? null : z.id)}
+                className="mt-2 text-xs text-neutral-400 underline"
+              >
+                {showing === z.id ? 'Hide QR' : 'Show QR'}
+              </button>
+              {showing === z.id && (
+                <div className="mt-2 inline-block rounded bg-white p-2">
+                  <QR value={url} size={128} />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </Section>
+  )
+}
+
+/**
+ * Generate a festival, for showing the dashboard to people when there is no
+ * crowd outside. Demo events only - see the note on runSimulation.
+ */
+function SimulatorSection({
+  eventId,
+  uid,
+  event,
+  zones,
+  checkpoints,
+}: {
+  eventId: string
+  uid: string
+  event: { name: string; demo?: boolean }
+  zones: Zone[]
+  checkpoints: Checkpoint[]
+}) {
+  const [progress, setProgress] = useState<SimProgress | null>(null)
+  const [status, setStatus] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [scale, setScale] = useState(DEFAULT_SCALE)
+  const handle = useRef<SimHandle | null>(null)
+
+  // Stop the trickle if the organizer navigates away mid-demo.
+  useEffect(() => () => handle.current?.stop(), [])
+
+  const plannedTaps = useMemo(
+    () =>
+      zones.length && checkpoints.length
+        ? planFestival(zones, checkpoints, { scale }).taps.length
+        : 0,
+    [zones, checkpoints, scale],
+  )
+
+  if (!event.demo) {
+    return (
+      <Section title="Demo simulator">
+        <p className="mb-3 text-sm text-neutral-400">
+          Generates a realistic three-hour festival so the dashboard has something to show
+          when there is no crowd outside. Only available on a demo event, because generated
+          taps are written into the same log as real ones and are then indistinguishable
+          from them.
+        </p>
+        <p className="mb-3 text-sm text-amber-400">
+          This event is not marked as a demo. Marking it puts a permanent SIMULATED badge on
+          its dashboard. Never do this to an event you intend to count people at.
+        </p>
+        <button
+          className={btnPlain}
+          onClick={() => {
+            if (
+              confirm(
+                `Mark "${event.name}" as a demo event?\n\nIts dashboard will show a SIMULATED badge from now on, and this cannot be undone from the app. Do not do this to a real event.`,
+              )
+            ) {
+              markAsDemo(eventId).catch((e) => setStatus(String(e)))
+            }
+          }}
+        >
+          Mark as demo event
+        </button>
+        {status && <p className="mt-2 text-sm text-red-400">{status}</p>}
+      </Section>
+    )
+  }
+
+  const running = progress !== null && progress.phase !== 'done'
+
+  const start = async () => {
+    setBusy(true)
+    setStatus(null)
+    try {
+      const existing = await countLiveTaps(eventId)
+      if (existing > 0) {
+        setStatus(
+          `This event already holds ${existing.toLocaleString()} taps. Clear the simulation first, or the two festivals will be added together.`,
+        )
+        setBusy(false)
+        return
+      }
+      handle.current = await runSimulation({
+        eventId,
+        uid,
+        zones,
+        checkpoints,
+        scale,
+        onProgress: setProgress,
+      })
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'The simulation could not start')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section title="Demo simulator">
+      <p className="mb-2 text-sm text-neutral-400">
+        Writes 2h40m of festival instantly, then plays the last 20 minutes out live over{' '}
+        {LIVE_MS / 60_000} minutes so the dashboard moves while people are watching it. A
+        light trickle keeps running afterwards so forecasts have something to be scored
+        against.
+      </p>
+      <label className="mb-2 grid gap-1 text-sm text-neutral-400">
+        Crowd size
+        <select
+          className={input}
+          value={scale}
+          onChange={(e) => setScale(Number(e.target.value))}
+          disabled={running}
+        >
+          <option value={1}>Full size - the crowd the capacities were set for</option>
+          <option value={0.5}>Half - cheaper rehearsal, no zone reaches its limit</option>
+          <option value={0.25}>Quarter - cheapest, for checking it works at all</option>
+        </select>
+      </label>
+      <p className="mb-3 text-xs text-neutral-500">
+        About {plannedTaps.toLocaleString()} taps, which is {plannedTaps.toLocaleString()}{' '}
+        Firestore writes - and as many reads every time the dashboard is opened. Be on the
+        Blaze plan before running this.
+        {scale < 1 && (
+          <>
+            {' '}
+            Capacities do not shrink with the crowd, so at this size nothing crosses 85% and
+            the alert banner will not appear. Use full size for the real demo.
+          </>
+        )}
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        <button disabled={busy || running} onClick={start} className={btnPrimary}>
+          {running ? 'Running…' : 'Simulate'}
+        </button>
+        {running && (
+          <button
+            className={btnPlain}
+            onClick={() => {
+              handle.current?.stop()
+              setProgress((p) => (p ? { ...p, phase: 'done', message: 'Stopped.' } : null))
+            }}
+          >
+            Stop
+          </button>
+        )}
+        <button
+          disabled={busy}
+          className={`${btn} bg-red-900 text-red-200`}
+          onClick={async () => {
+            if (!confirm('Mark every tap this browser wrote to this event as undone?')) return
+            // Stop first: a trickle still running would write new taps behind
+            // the clear and leave the event half-simulated.
+            handle.current?.stop()
+            setBusy(true)
+            try {
+              await clearSimulation({ eventId, uid, onProgress: setStatus })
+              setProgress(null)
+            } catch (e) {
+              setStatus(e instanceof Error ? e.message : 'Could not clear the simulation')
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          Clear simulation
+        </button>
+      </div>
+
+      {progress && (
+        <div className="mt-3">
+          <div className="h-1.5 overflow-hidden rounded-full bg-neutral-800">
+            <div
+              className="h-full bg-emerald-500 transition-[width]"
+              style={{ width: `${Math.min(100, (progress.written / Math.max(1, progress.total)) * 100)}%` }}
+            />
+          </div>
+          <p className="mt-1 text-sm text-neutral-300">{progress.message}</p>
+        </div>
+      )}
+      {status && <p className="mt-2 text-sm text-amber-400">{status}</p>}
+
+      <p className="mt-3 text-xs text-neutral-500">
+        Clear only reaches taps written by this browser, because that is the only thing the
+        rules let it undo. Run Simulate and Clear from the same browser.
+      </p>
     </Section>
   )
 }

@@ -175,6 +175,16 @@ export async function archiveAction(eventId: string, actionId: string): Promise<
   await updateDoc(doc(db, 'events', eventId, 'actions', actionId), { archived: true })
 }
 
+/**
+ * Mark an event as demo, which is what licenses the simulator and puts the
+ * SIMULATED badge on its dashboard. Deliberately not offered as a toggle you
+ * can flick off: an event that has ever held generated taps should carry the
+ * badge for the rest of its life.
+ */
+export async function markAsDemo(eventId: string): Promise<void> {
+  await updateDoc(doc(db, 'events', eventId), { demo: true })
+}
+
 export async function resetZone(
   eventId: string,
   zoneId: string,

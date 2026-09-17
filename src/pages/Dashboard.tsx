@@ -25,41 +25,55 @@ import {
 import {
   FORECAST_HORIZON_MIN,
   FORECAST_INTERVAL_MS,
+  MIN_SCORED_FOR_ACCURACY,
   accuracyOf,
+  accuracyPctOf,
   dueForResolution,
+  forecastDocId,
   recordForecast,
   resolveForecast,
 } from '../lib/forecastLog'
+import { silentFeeders, watchZone, zoneConfidence } from '../lib/confidence'
 import { buildOpsLog, BUSY_PCT } from '../lib/opsLog'
-import { percent } from '../lib/format'
+import { band, percent } from '../lib/format'
 import { OUTSIDE } from '../types'
 import type { FlagType } from '../types'
 import { Screen } from '../components/Screen'
 import { ZoneCard } from '../components/ZoneCard'
 import { SiteMap } from '../components/SiteMap'
 import type { ZoneStats } from '../components/ZoneCard'
-import { ThroughputChart, TimeBarChart, TimeLineChart } from '../components/charts'
+import { ArrivalsChart, ThroughputChart } from '../components/charts'
 import {
   AlertBanner,
   CheckpointHealth,
+  CollapsibleSection,
   FlowTable,
+  HeaderLock,
+  MoreDrawer,
   OpsLogList,
+  ResetDialog,
   Section,
+  SimulatedBadge,
   StatTile,
 } from '../components/sections'
+import type { ZoneAlert } from '../components/sections'
 
 const TREND_WINDOW_MIN = 10
 const SPARK_WINDOW_MIN = 60
 const FLOW_WINDOW_MIN = 15
 const THROUGHPUT_WINDOW_MIN = 10
 const MINUTE = 60_000
-const EVENT_BUCKET_MS = 5 * MINUTE
+const EVENT_BUCKET_MIN = 5
+const EVENT_BUCKET_MS = EVENT_BUCKET_MIN * MINUTE
 
 const AMBER_SILENCE_MS = 120_000
 const RED_SILENCE_MS = 300_000
 
 /** Charts do not need to redraw every second, and on a phone they should not. */
 const CHART_TICK_MS = 15_000
+
+/** A dismissed alert comes back after this long, or sooner if a new zone joins it. */
+const ALERT_SNOOZE_MS = 10 * MINUTE
 
 const FLAG_LABELS: Record<FlagType, string> = {
   long_line: 'Long line',
@@ -74,15 +88,18 @@ export function Dashboard() {
   const { event, zones, checkpoints, resets, loading, notFound } = useEventConfig(eventId, uid)
   const { taps } = useAllTaps(eventId, uid)
   const { flags } = useFlags(eventId, uid)
-  const { forecasts } = useForecasts(eventId, uid)
+  const { forecasts, loaded: forecastsLoaded } = useForecasts(eventId, uid)
   const { actions } = useActions(eventId, uid)
   const { siteMap } = useSiteMap(eventId, uid)
   const { status: adminStatus, error: adminError, unlock } = useAdminAccess(eventId, uid)
   const isAdmin = adminStatus === 'yes'
+  const wide = useWideScreen()
 
   const now = useNow(1000)
   const chartTick = Math.floor(now / CHART_TICK_MS)
   const [soundOn, setSoundOn] = useState(false)
+  const [snooze, setSnooze] = useState<{ until: number; zoneIds: string[] } | null>(null)
+  const [resetting, setResetting] = useState<string | null>(null)
 
   // ---- live numbers, cheap enough to recompute every second ---------------
   const occupancy = useMemo(
@@ -136,29 +153,50 @@ export function Dashboard() {
     [zones, checkpoints, taps, chartNow],
   )
 
+  /** Fullest first: whatever is closest to being a problem is the first card. */
   const zoneStats: ZoneStats[] = useMemo(
     () =>
-      zones.map((zone) => {
-        const series = zoneSeries.get(zone.id)
-        const points = series?.points ?? []
-        const current = occupancy.get(zone.id) ?? 0
-        const net10 = trend.get(zone.id) ?? 0
-        const last = points.at(-1) ?? { t: chartNow, v: current }
-        return {
-          zone,
-          occupancy: current,
-          net10,
-          spark: points,
-          forecast: forecastLine(last, net10, TREND_WINDOW_MIN, FORECAST_HORIZON_MIN, MINUTE),
-          minutesToCapacity: minutesToCapacity(current, zone.capacity, net10, TREND_WINDOW_MIN),
-          peak: series?.peak ?? { value: current, at: chartNow },
-          dwellMin: dwellMinutes(current, arrivalRate.get(zone.id) ?? 0),
-        }
-      }),
-    [zones, zoneSeries, occupancy, trend, arrivalRate, chartNow],
+      zones
+        .map((zone) => {
+          const series = zoneSeries.get(zone.id)
+          const points = series?.points ?? []
+          const current = occupancy.get(zone.id) ?? 0
+          const net10 = trend.get(zone.id) ?? 0
+          const last = points.at(-1) ?? { t: chartNow, v: current }
+          return {
+            zone,
+            occupancy: current,
+            net10,
+            spark: points,
+            forecast: forecastLine(last, net10, TREND_WINDOW_MIN, FORECAST_HORIZON_MIN, MINUTE),
+            minutesToCapacity: minutesToCapacity(current, zone.capacity, net10, TREND_WINDOW_MIN),
+            peak: series?.peak ?? { value: current, at: chartNow },
+            dwellMin: dwellMinutes(current, arrivalRate.get(zone.id) ?? 0),
+            confidence: zoneConfidence(zone.id, eventStart, resets, now),
+            silent: silentFeeders(zone.id, checkpoints, lastTap, eventStart, now),
+          }
+        })
+        .sort(
+          (a, b) =>
+            percent(b.occupancy, b.zone.capacity) - percent(a.occupancy, a.zone.capacity),
+        ),
+    [
+      zones,
+      zoneSeries,
+      occupancy,
+      trend,
+      arrivalRate,
+      chartNow,
+      eventStart,
+      resets,
+      checkpoints,
+      lastTap,
+      now,
+    ],
   )
 
   const accuracy = useMemo(() => accuracyOf(forecasts), [forecasts])
+  const accuracyPct = useMemo(() => accuracyPctOf(zones, forecasts), [zones, forecasts])
 
   const opsLog = useMemo(
     () =>
@@ -173,7 +211,7 @@ export function Dashboard() {
     [zones, zoneSeries, flags, resets, forecasts, checkpoints],
   )
 
-  const alerts = useMemo(
+  const alerts: ZoneAlert[] = useMemo(
     () =>
       zoneStats
         .map((s) => ({
@@ -185,8 +223,16 @@ export function Dashboard() {
     [zoneStats],
   )
 
-  useAlertChime(alerts.length, soundOn)
-  useForecastLogging({ eventId, isAdmin, zoneStats, taps, now, zones, checkpoints, resets, forecasts, chartTick })
+  // A snooze covers the zones that were alerting when it was tapped. A zone that
+  // starts alerting afterwards is new information and brings the banner back.
+  const snoozed =
+    snooze !== null &&
+    now < snooze.until &&
+    alerts.every((a) => snooze.zoneIds.includes(a.zone.id))
+  const visibleAlerts = snoozed ? [] : alerts
+
+  useAlertChime(visibleAlerts.length, soundOn)
+  useForecastLogging({ eventId, isAdmin, zoneStats, taps, now, zones, checkpoints, resets, forecasts, forecastsLoaded, chartTick })
 
   if (loading) return <Screen title="Loading…" />
   if (notFound) return <Screen title="Event not found" />
@@ -204,35 +250,86 @@ export function Dashboard() {
   )
 
   const openFlags = flags.filter((f) => !f.acknowledged)
-  const onSite = site.at(-1)?.onSite ?? 0
-  const totalArrivals = site.at(-1)?.cumulativeArrivals ?? 0
+
+  // The strip's four answers, in the order an organizer needs them.
+  const attendance = site.at(-1)?.cumulativeArrivals ?? 0
+  const onSite = [...occupancy.values()].reduce((a, b) => a + b, 0)
+  const watch = watchZone(
+    zoneStats.map((s) => ({
+      zone: s.zone,
+      pct: percent(s.occupancy, s.zone.capacity),
+      minutesToCapacity: s.minutesToCapacity,
+    })),
+  )
+  const resettingZone = zones.find((z) => z.id === resetting)
 
   return (
     <div className="mx-auto min-h-[100svh] max-w-5xl bg-neutral-950 p-3 pb-16 text-neutral-100">
-      <header className="mb-3 flex items-baseline justify-between gap-3">
+      <header className="mb-3 flex items-baseline justify-between gap-2">
         <h1 className="truncate text-xl font-bold">{event?.name}</h1>
-        <Link to={`/report/${eventId}`} className="shrink-0 text-xs text-neutral-400 underline">
-          report
-        </Link>
+        <div className="flex shrink-0 items-center gap-1">
+          <Link to={`/report/${eventId}`} className="text-xs text-neutral-400 underline">
+            report
+          </Link>
+          <HeaderLock isAdmin={isAdmin} error={adminError} onUnlock={unlock} />
+        </div>
       </header>
 
+      {event?.demo && <SimulatedBadge />}
+
+      {/* 1. How many people are here. 2. What is about to be a problem.
+          3. Whether the numbers can still be trusted. */}
+      <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <StatTile
+          label="Attendance so far"
+          value={attendance.toLocaleString()}
+          sub="everyone who has come in"
+          emphasis
+        />
+        <StatTile label="On site now" value={onSite.toLocaleString()} sub="across all areas" />
+        <StatTile
+          label="Watch"
+          value={watch ? `${watch.pct}%` : 'Steady'}
+          sub={
+            watch
+              ? `${watch.zone.name} · full in ~${Math.min(60, Math.round(watch.minutesToCapacity as number))} min`
+              : 'All zones steady'
+          }
+          tone={watch ? band(watch.pct) : undefined}
+        />
+        <StatTile
+          label="Forecast accuracy"
+          value={accuracyPct.mae === null ? '—' : `±${accuracyPct.mae.toFixed(0)}%`}
+          sub={
+            accuracyPct.mae === null
+              ? `${accuracyPct.count} of ${MIN_SCORED_FOR_ACCURACY} scored`
+              : `${accuracyPct.count} scored · of capacity`
+          }
+        />
+      </div>
+
       <AlertBanner
-        alerts={alerts}
+        alerts={visibleAlerts}
         actions={actions}
         soundOn={soundOn}
         onToggleSound={() => setSoundOn((v) => !v)}
+        onDismiss={() =>
+          setSnooze({ until: Date.now() + ALERT_SNOOZE_MS, zoneIds: alerts.map((a) => a.zone.id) })
+        }
       />
 
-      {siteMap && (
-        <Section title="Site map" note="Circle size and colour follow how full each area is.">
-          <SiteMap imageUrl={siteMap} zones={zones} occupancy={occupancy} />
-        </Section>
-      )}
-
-      <Section title="Zones" note={`Last ${SPARK_WINDOW_MIN} minutes, with the next ${FORECAST_HORIZON_MIN} projected (dashed).`}>
+      <Section
+        title="Zones"
+        note={`Fullest first. Last ${SPARK_WINDOW_MIN} minutes, with the next ${FORECAST_HORIZON_MIN} projected (dashed).`}
+      >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {zoneStats.map((stats) => (
-            <ZoneCard key={stats.zone.id} stats={stats} />
+            <ZoneCard
+              key={stats.zone.id}
+              stats={stats}
+              detail={false}
+              onReset={isAdmin ? () => setResetting(stats.zone.id) : undefined}
+            />
           ))}
         </div>
         {zones.length === 0 && (
@@ -240,70 +337,9 @@ export function Dashboard() {
         )}
       </Section>
 
-      <Section
-        title="Forecast accuracy"
-        note={`Every ${FORECAST_INTERVAL_MS / MINUTE} minutes each zone's ${FORECAST_HORIZON_MIN}-minute forecast is recorded, then scored against what actually happened.`}
-      >
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <StatTile
-            label="Mean absolute error"
-            value={accuracy.mae === null ? '—' : `${accuracy.mae.toFixed(1)}`}
-            sub={accuracy.mae === null ? 'nothing scored yet' : 'people, per forecast'}
-          />
-          <StatTile
-            label="Bias"
-            value={
-              accuracy.bias === null
-                ? '—'
-                : `${accuracy.bias > 0 ? '+' : ''}${accuracy.bias.toFixed(1)}`
-            }
-            sub={accuracy.bias === null ? '' : accuracy.bias > 0 ? 'runs high' : 'runs low'}
-          />
-          <StatTile label="Scored" value={String(accuracy.count)} sub="forecasts" />
-        </div>
-        {!isAdmin && (
-          <p className="mt-2 text-xs text-neutral-500">
-            Forecasts are recorded by the organizer's dashboard. Unlock below to record them
-            from this device.
-          </p>
-        )}
-      </Section>
-
-      <Section title="People on site" note="Net entries through the gates, since the first tap.">
-        <div className="mb-2 grid grid-cols-2 gap-2">
-          <StatTile label="On site now" value={onSite.toLocaleString()} />
-          <StatTile label="Total attendance" value={totalArrivals.toLocaleString()} sub="everyone who came in" />
-        </div>
-        <TimeLineChart data={site} dataKey="onSite" label="on site" />
-      </Section>
-
-      <Section title="Arrivals" note="People entering the site, per 5 minutes.">
-        <TimeBarChart data={site} dataKey="arrivals" label="arrivals" />
-      </Section>
-
-      <Section
-        title="Checkpoint throughput"
-        note={`People per minute across each point, last ${THROUGHPUT_WINDOW_MIN} minutes. Red means the checkpoint has gone quiet.`}
-      >
-        <ThroughputChart
-          data={checkpoints.map((c) => ({
-            id: c.id,
-            name: c.name,
-            perMinute: throughput.find((t) => t.checkpointId === c.id)?.perMinute ?? 0,
-          }))}
-          quietIds={quietCheckpoints}
-        />
-      </Section>
-
-      <Section title={`Flow, last ${FLOW_WINDOW_MIN} minutes`}>
-        <FlowTable checkpoints={checkpoints} throughput={flowRows} zoneName={zoneName} />
-      </Section>
-
-      <Section title="Operations log" note="Alerts, flags, resets and forecast outcomes.">
-        <OpsLogList entries={opsLog} />
-      </Section>
-
-      <Section title="Checkpoint health">
+      {/* Directly under the cards: a quiet checkpoint is the reason a number
+          above is wrong, so the two are read together. */}
+      <Section title="Checkpoint health" note="A quiet checkpoint means the counts above are drifting.">
         <CheckpointHealth
           checkpoints={checkpoints}
           lastTap={lastTap}
@@ -342,31 +378,105 @@ export function Dashboard() {
         </Section>
       )}
 
-      {isAdmin && zones.length > 0 && (
-        <Section
-          title="Reset a zone"
-          note="Use when a zone has visibly emptied but the count has drifted. The taps stay in the log."
+      <CollapsibleSection
+        title="Arrivals and attendance"
+        note={`Bars are people entering the site per ${EVENT_BUCKET_MIN} minutes; the line is everyone who has come in.`}
+        openByDefault={wide}
+      >
+        <ArrivalsChart data={site} bucketMinutes={EVENT_BUCKET_MIN} />
+      </CollapsibleSection>
+
+      {siteMap && (
+        <CollapsibleSection
+          title="Site map"
+          note="Circle size and colour follow how full each area is."
+          openByDefault={wide}
         >
-          <div className="flex flex-wrap gap-2">
-            {zones.map((z) => (
-              <button
-                key={z.id}
-                onClick={() => {
-                  if (confirm(`Set ${z.name} back to 0? This is recorded in the log.`))
-                    resetZone(eventId!, z.id, 0, 'Reset from dashboard').catch(console.error)
-                }}
-                className="rounded-lg bg-neutral-800 px-3 py-2 text-sm font-semibold"
-              >
-                Reset {z.name}
-              </button>
-            ))}
-          </div>
-        </Section>
+          <SiteMap imageUrl={siteMap} zones={zones} occupancy={occupancy} />
+        </CollapsibleSection>
       )}
 
-      {adminStatus === 'no' && <UnlockBox error={adminError} onUnlock={unlock} />}
+      <MoreDrawer>
+        <Section
+          title="Checkpoint throughput"
+          note={`People per minute across each point, last ${THROUGHPUT_WINDOW_MIN} minutes. Red means the checkpoint has gone quiet.`}
+        >
+          <ThroughputChart
+            data={checkpoints.map((c) => ({
+              id: c.id,
+              name: c.name,
+              perMinute: throughput.find((t) => t.checkpointId === c.id)?.perMinute ?? 0,
+            }))}
+            quietIds={quietCheckpoints}
+          />
+        </Section>
+
+        <Section title={`Flow, last ${FLOW_WINDOW_MIN} minutes`}>
+          <FlowTable checkpoints={checkpoints} throughput={flowRows} zoneName={zoneName} />
+        </Section>
+
+        <Section
+          title="Forecast accuracy in detail"
+          note={`Every ${FORECAST_INTERVAL_MS / MINUTE} minutes each zone's ${FORECAST_HORIZON_MIN}-minute forecast is recorded, then scored against what actually happened.`}
+        >
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <StatTile
+              label="Mean absolute error"
+              value={accuracy.mae === null ? '—' : accuracy.mae.toFixed(1)}
+              sub={accuracy.mae === null ? 'nothing scored yet' : 'people, per forecast'}
+            />
+            <StatTile
+              label="Bias"
+              value={
+                accuracy.bias === null
+                  ? '—'
+                  : `${accuracy.bias > 0 ? '+' : ''}${accuracy.bias.toFixed(1)}`
+              }
+              sub={accuracy.bias === null ? '' : accuracy.bias > 0 ? 'runs high' : 'runs low'}
+            />
+            <StatTile label="Scored" value={String(accuracy.count)} sub="forecasts" />
+          </div>
+          {!isAdmin && (
+            <p className="mt-2 text-xs text-neutral-500">
+              Forecasts are recorded by the organizer's dashboard. Unlock this device with the
+              lock in the header to record them here.
+            </p>
+          )}
+        </Section>
+
+        <Section title="Operations log" note="Alerts, flags, resets and forecast outcomes.">
+          <OpsLogList entries={opsLog} />
+        </Section>
+      </MoreDrawer>
+
+      {resettingZone && (
+        <ResetDialog
+          zoneName={resettingZone.name}
+          onCancel={() => setResetting(null)}
+          onConfirm={(count, note) => {
+            resetZone(eventId!, resettingZone.id, count, note || 'Reset from dashboard').catch(
+              console.error,
+            )
+            setResetting(null)
+          }}
+        />
+      )}
     </div>
   )
+}
+
+/** Desktop has room to leave the chart open; a phone does not. */
+function useWideScreen(): boolean {
+  const [wide, setWide] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 640px)')
+    const onChange = (e: MediaQueryListEvent) => setWide(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return wide
 }
 
 /**
@@ -382,6 +492,7 @@ function useForecastLogging({
   checkpoints,
   resets,
   forecasts,
+  forecastsLoaded,
   now,
   chartTick,
 }: {
@@ -393,6 +504,7 @@ function useForecastLogging({
   checkpoints: import('../types').Checkpoint[]
   resets: import('../types').Reset[]
   forecasts: import('../types').Forecast[]
+  forecastsLoaded: boolean
   now: number
   chartTick: number
 }) {
@@ -403,22 +515,37 @@ function useForecastLogging({
   const hasTaps = taps.some((t) => !t.undone)
 
   useEffect(() => {
-    if (!eventId || !isAdmin || !hasTaps || zoneStats.length === 0) return
+    if (!eventId || !isAdmin || !hasTaps || !forecastsLoaded || zoneStats.length === 0) return
     if (loggedBucket.current === bucket) return
     loggedBucket.current = bucket
 
+    const madeAtMs = bucket * FORECAST_INTERVAL_MS
+    const alreadyLogged = new Set(forecasts.map((f) => f.id))
+
     for (const stats of zoneStats) {
+      // Forecast ids are deterministic, so a second dashboard open on the same
+      // event would rewrite this interval's document - and the rules only allow
+      // a forecast to be created once and scored once, never rewritten. Left
+      // alone that is a permission error on every organizer's spare tablet,
+      // every two minutes, for the whole evening.
+      if (alreadyLogged.has(forecastDocId(stats.zone.id, madeAtMs))) continue
+
       const predicted = projectedOccupancy(
         stats.occupancy,
         stats.net10,
         TREND_WINDOW_MIN,
         FORECAST_HORIZON_MIN,
       )
-      recordForecast(eventId, stats.zone.id, bucket * FORECAST_INTERVAL_MS, predicted).catch((e) =>
-        console.error('forecast not recorded', e),
-      )
+      recordForecast(eventId, stats.zone.id, madeAtMs, predicted).catch((e) => {
+        // Two dashboards can still start inside the same interval and race for
+        // the document. The loser is told no, which is the right answer - the
+        // forecast is on record either way - so it is not worth shouting about.
+        if ((e as { code?: string }).code !== 'permission-denied') {
+          console.error('forecast not recorded', e)
+        }
+      })
     }
-  }, [eventId, isAdmin, hasTaps, bucket, zoneStats])
+  }, [eventId, isAdmin, hasTaps, forecastsLoaded, bucket, zoneStats, forecasts])
 
   useEffect(() => {
     if (!eventId || !isAdmin) return
@@ -463,34 +590,4 @@ function useAlertChime(alertCount: number, soundOn: boolean) {
       /* audio is a convenience, never a requirement */
     }
   }, [alertCount, soundOn])
-}
-
-function UnlockBox({
-  error,
-  onUnlock,
-}: {
-  error: string | null
-  onUnlock: (secret: string) => void
-}) {
-  const [value, setValue] = useState('')
-  return (
-    <section className="rounded-lg border border-neutral-800 p-3">
-      <p className="mb-2 text-sm text-neutral-400">
-        Enter the admin secret to record forecasts, acknowledge flags and reset zones from
-        this device.
-      </p>
-      <div className="flex gap-2">
-        <input
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="XXXX-XXXX-XXXX"
-          className="min-w-0 flex-1 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 font-mono"
-        />
-        <button onClick={() => onUnlock(value)} className="rounded-lg bg-neutral-700 px-4 py-2 font-bold">
-          Unlock
-        </button>
-      </div>
-      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
-    </section>
-  )
 }

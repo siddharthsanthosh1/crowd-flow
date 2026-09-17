@@ -3,6 +3,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
+  Legend,
   Line,
   LineChart,
   ReferenceLine,
@@ -325,5 +327,80 @@ export function AccuracyLegend({ theme = 'light' }: { theme?: ChartTheme }) {
         predicted
       </span>
     </div>
+  )
+}
+
+/**
+ * Arrivals and attendance on one chart, because they are two views of the same
+ * fact and the organizer was reading them side by side anyway: bars are how
+ * fast people are coming in right now, the line is how many have come in
+ * altogether. Two axes, so the shape of the bars is not flattened by a
+ * cumulative total that only ever grows.
+ *
+ * The line is drawn in the second series colour and the legend spells out which
+ * is which, so the two are never told apart by colour alone.
+ */
+export function ArrivalsChart({
+  data,
+  bucketMinutes,
+  theme = 'dark',
+  height = 220,
+}: {
+  data: { t: number; arrivals: number; cumulativeArrivals: number }[]
+  bucketMinutes: number
+  theme?: ChartTheme
+  height?: number
+}) {
+  const p = PALETTE[theme]
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <ComposedChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: -16 }}>
+        <CartesianGrid stroke={p.grid} vertical={false} />
+        <XAxis
+          dataKey="t"
+          tickFormatter={(t) => clock(Number(t))}
+          minTickGap={36}
+          {...axisProps(theme)}
+        />
+        <YAxis yAxisId="rate" width={40} allowDecimals={false} {...axisProps(theme)} />
+        <YAxis
+          yAxisId="total"
+          orientation="right"
+          width={48}
+          allowDecimals={false}
+          tickFormatter={(v) => Number(v).toLocaleString()}
+          {...axisProps(theme)}
+        />
+        <Tooltip
+          {...tooltipStyle(theme)}
+          cursor={{ fill: theme === 'dark' ? '#ffffff10' : '#00000008' }}
+          labelFormatter={(t) => clock(Number(t))}
+          formatter={(value, name) => [Math.round(Number(value)).toLocaleString(), name]}
+        />
+        <Legend
+          verticalAlign="top"
+          height={24}
+          wrapperStyle={{ fontSize: 11, color: PALETTE[theme].axis }}
+        />
+        <Bar
+          yAxisId="rate"
+          dataKey="arrivals"
+          name={`arriving per ${bucketMinutes} min`}
+          fill={p.series1}
+          radius={[3, 3, 0, 0]}
+          isAnimationActive={false}
+        />
+        <Line
+          yAxisId="total"
+          type="monotone"
+          dataKey="cumulativeArrivals"
+          name="attendance so far"
+          stroke={p.series2}
+          strokeWidth={2}
+          dot={false}
+          isAnimationActive={false}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
   )
 }

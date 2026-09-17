@@ -100,3 +100,37 @@ export function accuracyByZone(
   }
   return out
 }
+
+/** Below this many scored forecasts the average says more about luck than skill. */
+export const MIN_SCORED_FOR_ACCURACY = 5
+
+export type AccuracyPct = {
+  count: number
+  /**
+   * Mean absolute error as a share of the zone's capacity, in percentage points.
+   * Measured against capacity rather than against the actual count so it is in
+   * the same units as the percentage on every zone card - "±11%" and "71%" are
+   * shares of the same denominator - and so a forecast made while a zone is
+   * nearly empty cannot produce a 500% error out of a handful of people.
+   *
+   * Null until enough forecasts have been scored to mean anything.
+   */
+  mae: number | null
+}
+
+export function accuracyPctOf(zones: Zone[], forecasts: Forecast[]): AccuracyPct {
+  const capacity = new Map(zones.map((z) => [z.id, z.capacity]))
+  const scored = forecasts.filter((f) => f.actualOccupancy !== null)
+
+  let total = 0
+  let used = 0
+  for (const f of scored) {
+    const cap = capacity.get(f.zoneId)
+    if (!cap || cap <= 0) continue // a zone that has since been archived
+    total += (Math.abs(f.predictedOccupancy - (f.actualOccupancy as number)) / cap) * 100
+    used++
+  }
+
+  if (used < MIN_SCORED_FOR_ACCURACY) return { count: used, mae: null }
+  return { count: used, mae: total / used }
+}

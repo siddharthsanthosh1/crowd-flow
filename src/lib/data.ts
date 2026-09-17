@@ -173,20 +173,26 @@ export function useFlags(eventId: string | undefined, uid: string | null) {
 /** Recorded forecasts, so the dashboard can score itself against what happened. */
 export function useForecasts(eventId: string | undefined, uid: string | null) {
   const [forecasts, setForecasts] = useState<Forecast[]>([])
+  // Until the first snapshot lands we do not know what has already been
+  // recorded, and a dashboard that starts writing before then will collide with
+  // whatever another dashboard already wrote for this interval.
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     if (!eventId || !uid) return
+    setLoaded(false)
     const q = query(
       collection(db, 'events', eventId, 'forecasts'),
       orderBy('targetTime', 'desc'),
       limit(500),
     )
-    return onSnapshot(q, (snap) =>
-      setForecasts(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Forecast)),
-    )
+    return onSnapshot(q, (snap) => {
+      setForecasts(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Forecast))
+      setLoaded(true)
+    })
   }, [eventId, uid])
 
-  return { forecasts }
+  return { forecasts, loaded }
 }
 
 /** "When {zone} is over {n}%, show: {text}" - set up on the admin page. */
