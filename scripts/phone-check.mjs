@@ -97,7 +97,12 @@ check('confidence on every card', /confidence · \d+ min/i.test(dash.stats.text)
 check('checkpoint health is not buried', /checkpoint health/i.test(dash.stats.text))
 // Flow, throughput and the operations log live behind the More drawer now, and
 // the drawer does not mount them until it is opened.
-check('detail is behind More', !/operations log/i.test(dash.stats.text))
+// Case-sensitive on purpose: the closed drawer's own label says "flow,
+// throughput, operations log", while the section headings render upper-cased.
+check(
+  'detail is behind More',
+  !/OPERATIONS LOG/.test(dash.stats.text) && !/FLOW, LAST/.test(dash.stats.text),
+)
 check('no unlock box in the page body', !/enter the admin secret/i.test(dash.stats.text))
 
 const report = await open(`/report/${eventId}`, 'report')
