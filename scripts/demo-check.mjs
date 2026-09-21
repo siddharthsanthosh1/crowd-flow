@@ -155,7 +155,7 @@ check('watch tile names a zone or says steady', /full in ~\d+ min|All zones stea
 check('forecast tile waits for five scored', /of 5 scored/.test(t), t.match(/Forecast accuracy\n[^\n]*\n[^\n]*/)?.[0]?.replace(/\n/g, ' '))
 check('alert banner fired', /⚠ (Stage Seating|Main Lawn|Food Court|Vendor Row)/.test(t), t.match(/⚠ [^\n]*/)?.[0])
 check('rate is per minute, not per 10 min', /\/ min/.test(t) && !/\/ 10 min/.test(t))
-check('confidence chip on the cards', /CONFIDENCE · \d+M|confidence · \d+m/i.test(t), t.match(/\w+ confidence · \d+m/i)?.[0])
+check('confidence chip on the cards', /confidence · \d+ ?m/i.test(t), t.match(/\w+ confidence · \d+ ?min/i)?.[0])
 check('silent feeder warning on a zone', /stopped reporting at/i.test(t), t.match(/⚠ [^\n]*stopped reporting[^\n]*/i)?.[0])
 const order = (needle) => t.toUpperCase().indexOf(needle.toUpperCase())
 check(
