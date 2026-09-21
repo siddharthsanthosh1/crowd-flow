@@ -18,6 +18,10 @@ import { Screen } from '../components/Screen'
 import { ZoneCard } from '../components/ZoneCard'
 import { AccuracyChart, AccuracyLegend, TimeBarChart, TimeLineChart } from '../components/charts'
 import { FlowTable, OpsLogList, Section, StatTile } from '../components/sections'
+import { PlanningReport, ReplayScrubber } from '../components/Planning'
+import { usePlanningFlag, useServiceTimes, useTrucks } from '../lib/planning/data'
+import { assumptionsFor, bands, checksFor, foodModel, staffingFor } from '../lib/planning/model'
+import type { PlanningEvent } from '../lib/planning/types'
 
 const MINUTE = 60_000
 const BUCKET_MS = 5 * MINUTE
@@ -77,6 +81,27 @@ export function Report() {
   )
   const accuracy = useMemo(() => accuracyOf(forecasts), [forecasts])
   const perZoneAccuracy = useMemo(() => accuracyByZone(zones, forecasts), [zones, forecasts])
+
+  // ---- planning layer: nothing below runs, or reads, while the flag is off ----
+  const planningOn = usePlanningFlag(event as PlanningEvent | null)
+  const planning = useMemo(() => (event as PlanningEvent | null)?.planning ?? {}, [event])
+  const { trucks } = useTrucks(eventId, uid, planningOn)
+  const { samples } = useServiceTimes(eventId, uid, planningOn)
+  const bandsAt = useMemo(
+    () => (t: number) => bands(planning, zones, checkpoints, taps, resets, t),
+    [planning, zones, checkpoints, taps, resets],
+  )
+  const plan = useMemo(() => {
+    if (!planningOn || !range) return null
+    return {
+      band: bandsAt(range.to),
+      zoneEnd: computeOccupancy(zones, checkpoints, taps, resets, range.to),
+      staffing: staffingFor(planning, checkpoints, taps, range.from, range.to),
+      food: foodModel(planning, checkpoints, taps, trucks, samples, range.from, range.to),
+      flags: checksFor(planning, zones, checkpoints, taps, resets, range.from, range.to),
+      assumptions: assumptionsFor(planning, zones, trucks),
+    }
+  }, [planningOn, range, bandsAt, planning, zones, checkpoints, taps, resets, trucks, samples])
 
   if (loading) return <Screen title="Loading…" />
   if (notFound || !event) return <Screen title="Event not found" />
@@ -245,6 +270,36 @@ export function Report() {
         <Section title="Operations log" theme="light">
           <OpsLogList entries={opsLog} theme="light" limit={200} />
         </Section>
+
+        {plan && (
+          <>
+            <PlanningReport
+              attendance={totalAttendance}
+              attendanceBand={plan.band.attendance}
+              zones={zones}
+              zoneEnd={plan.zoneEnd}
+              zoneBand={plan.band.zones}
+              site={site}
+              staffing={plan.staffing}
+              staffRatio={planning.staffRatio}
+              food={plan.food}
+              flags={plan.flags}
+              assumptions={plan.assumptions}
+              foodZoneName={zones.find((z) => z.id === planning.foodZoneId)?.name ?? null}
+            />
+            <ReplayScrubber
+              zones={zones}
+              checkpoints={checkpoints}
+              taps={taps}
+              resets={resets}
+              series={series}
+              from={range.from}
+              to={range.to}
+              flags={plan.flags}
+              bandsAt={bandsAt}
+            />
+          </>
+        )}
 
         <p className="mt-8 text-xs text-neutral-500">
           Counts come from volunteers tapping at each checkpoint. Occupancy is a running

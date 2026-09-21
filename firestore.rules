@@ -201,6 +201,61 @@ service cloud.firestore {
           && request.resource.data.ts == request.time;
         allow update, delete: if false;
       }
+
+      // ---- planning layer ------------------------------------------------
+      // Added for the planning report. Everything above this line is unchanged.
+
+      // Food trucks, set up by the organizer. Names only.
+      match /trucks/{truckId} {
+        allow read: if signedIn();
+        allow create, update: if isAdmin(eventId);
+        allow delete: if false;
+      }
+
+      // Service times from the /service/... screen. Same threat model as taps:
+      // anyone holding the event id can write, a device writes only as itself,
+      // and a sample is only ever soft-deleted by the device that wrote it.
+      function validServiceTime() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(
+                 ['truckId', 'durationMs', 'clientTs', 'serverTs', 'deviceId', 'undone'])
+          && d.keys().hasAll(
+                 ['truckId', 'durationMs', 'clientTs', 'serverTs', 'deviceId', 'undone'])
+          && d.truckId is string
+          // One second to thirty minutes. Anything outside is a forgotten button.
+          && d.durationMs is int && d.durationMs >= 1000 && d.durationMs <= 1800000
+          && d.undone == false
+          && d.deviceId == request.auth.uid
+          && d.clientTs is timestamp
+          && d.clientTs <= request.time + duration.value(10, 'm')
+          && d.clientTs >= request.time - duration.value(24, 'h')
+          && d.serverTs == request.time;
+      }
+
+      match /serviceTimes/{sampleId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && validServiceTime();
+        allow update: if signedIn()
+          && resource.data.deviceId == request.auth.uid
+          && changedKeys().hasOnly(['undone'])
+          && request.resource.data.undone == true
+          && request.time < resource.data.clientTs + duration.value(24, 'h');
+        allow delete: if false;
+      }
+
+      // The second forecaster's record. Identical rules to /forecasts.
+      match /forecastsHolt/{forecastId} {
+        allow read: if signedIn();
+        allow create: if isAdmin(eventId) && validForecast();
+        allow update: if isAdmin(eventId)
+          && changedKeys().hasOnly(['actualOccupancy', 'resolvedAt'])
+          && resource.data.actualOccupancy == null
+          && request.resource.data.actualOccupancy is int
+          && request.resource.data.actualOccupancy >= 0
+          && request.resource.data.resolvedAt == request.time
+          && request.time > resource.data.targetTime;
+        allow delete: if false;
+      }
     }
   }
 }

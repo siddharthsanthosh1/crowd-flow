@@ -19,6 +19,8 @@ export type ZoneStats = {
   confidence?: ZoneConfidence
   /** Dashboard only: feeders that have stopped reporting. */
   silent?: SilentFeeder[]
+  /** Planning only: ± one standard deviation from the missed-tap model. */
+  band?: number
 }
 
 const CONFIDENCE_STYLES: Record<Confidence, string> = {
@@ -81,6 +83,14 @@ export function ZoneCard({
 
       <div className="flex items-baseline gap-2">
         <span className={`text-5xl font-black ${strong}`}>{occupancy.toLocaleString()}</span>
+        {stats.band !== undefined && (
+          <span
+            className={`text-lg font-bold ${strong}`}
+            title="± one standard deviation, from the assumed chance of a volunteer missing a person. An assumption, not a measured error."
+          >
+            ± {stats.band.toLocaleString()}
+          </span>
+        )}
         <span className={`text-sm ${muted}`}>of {zone.capacity.toLocaleString()}</span>
       </div>
 

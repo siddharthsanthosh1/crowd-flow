@@ -10,6 +10,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { OUTSIDE } from '../types'
+import { clearPlanningDemo, demoFoodZone, seedPlanningDemo } from './planning/simulate'
 import type { Checkpoint, FlagType, TapDirection, Zone } from '../types'
 
 /**
@@ -352,6 +353,16 @@ export async function runSimulation({
   }
   await flagBatch.commit()
 
+  // Trucks, service times and an order share for the Planning section. They
+  // live in their own collections and are invisible while planning is off.
+  // A failure here must never stop the demo itself.
+  await seedPlanningDemo({
+    eventId,
+    uid,
+    foodZoneId: demoFoodZone(zones, checkpoints, assignRoles(zones, checkpoints).food),
+    minuteToMs: historyMs,
+  }).catch((e) => console.warn('planning demo data not written', e))
+
   // ---- the live tail, played out over LIVE_MS ----------------------------
   const live = plan.live
   const liveSpan = SPAN_MIN - HISTORY_MIN
@@ -442,6 +453,7 @@ export async function clearSimulation({
   uid: string
   onProgress: (message: string) => void
 }): Promise<number> {
+  await clearPlanningDemo(eventId, uid).catch((e) => console.warn('service times not cleared', e))
   onProgress('Finding simulated taps…')
   const snap = await getDocs(
     query(collection(db, 'events', eventId, 'taps'), where('deviceId', '==', uid)),

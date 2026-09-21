@@ -58,7 +58,7 @@ export function Print() {
   )
 }
 
-function Card({
+export function Card({
   eventLine,
   title,
   url,

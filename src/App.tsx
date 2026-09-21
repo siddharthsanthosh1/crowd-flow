@@ -13,6 +13,10 @@ const Dashboard = lazy(() => import('./pages/Dashboard').then((m) => ({ default:
 const Print = lazy(() => import('./pages/Print').then((m) => ({ default: m.Print })))
 const Vendor = lazy(() => import('./pages/Vendor').then((m) => ({ default: m.Vendor })))
 const Report = lazy(() => import('./pages/Report').then((m) => ({ default: m.Report })))
+const PrintService = lazy(() =>
+  import('./pages/PrintService').then((m) => ({ default: m.PrintService })),
+)
+const Service = lazy(() => import('./pages/Service').then((m) => ({ default: m.Service })))
 
 export default function App() {
   return (
@@ -28,6 +32,8 @@ export default function App() {
           <Route path="/print/:eventId" element={<Print />} />
           <Route path="/vendor/:eventId/:zoneId" element={<Vendor />} />
           <Route path="/report/:eventId" element={<Report />} />
+          <Route path="/service/:eventId/:token" element={<Service />} />
+          <Route path="/print/:eventId/service" element={<PrintService />} />
           <Route path="*" element={<Screen title="Page not found" />} />
         </Routes>
       </Suspense>

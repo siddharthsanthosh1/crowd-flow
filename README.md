@@ -382,6 +382,109 @@ firebase deploy --only hosting
 `firebase deploy` needs `firebase login` first, with access to the
 `crowdcontroldiwali` project.
 
+## Planning features
+
+A second layer on the dashboard and report, built for one question: how many food
+trucks and staff did this event need, with attendance a parks department can
+defend? The evening is data collection; the report is the product. Every number
+lists the assumption it rests on.
+
+**All of it is behind one switch, off by default.** With it off, the dashboard and
+report are exactly what they were at `demo-ready` (checked text-for-text by
+`scripts/planning-check.mjs`).
+
+### Turning it on and off
+
+- **For the event:** admin page → *Planning features* → tick the box. Untick to hide it
+  again. Every open dashboard and report updates within a second or two.
+- **For one visit, without touching the switch:** add `?planning=1` to a dashboard or
+  report link (`/dash/<id>?planning=1`, `/report/<id>?planning=1`). `?planning=0` hides
+  it even when the switch is on.
+
+The organizer inputs (food-court zone, trucks, order share, target wait, miss rate,
+staffing ratio) and the service-timer QR card appear under the switch once it is on.
+
+### The models, for a parks manager
+
+**Service times.** A volunteer times customers at each truck for about half an hour
+before the rush, on the `/service/...` screen: START when someone reaches the window,
+DONE when they leave with food. A truck's speed is only used once it has at least 8
+timed customers; until then the report says "not enough samples".
+
+**Food-truck lines (Erlang C).** The number of people walking into the food court every
+5 minutes, times the share you say will order, is compared with how fast the trucks
+serve; from that, standard queueing maths (the M/M/c model) gives the expected wait.
+It assumes customers always find the shortest line, so it is the *best case*, and when
+the trucks cannot keep up at all it says "line growing" instead of inventing a number.
+*Assumptions:* random arrivals and service times; one shared line; each 5-minute block
+treated as settled (a real line lags a surge); the order share is yours, and until you
+enter it the report shows 50%, 75% and 100% side by side. The what-if table shows one
+fewer truck through two more, and highlights the fewest that keeps every wait under your
+target (10 minutes unless you change it).
+
+**Attendance band (±).** Volunteers miss people; if each person is missed independently
+with a small chance (3% unless you change it), the count is uncertain by roughly the
+square root of the number of taps times that chance, and a zone reset brings its
+uncertainty back to nearly zero. The ± is one standard deviation. *Assumptions:* misses
+are independent; double taps and silent phones are not included; misses make counts run
+low, so treat the band as a floor, not a ceiling. (In code: a one-dimensional Kalman
+filter on the variance only, `src/lib/planning/band.ts`.)
+
+**Staffing by 15 minutes.** The most people on site in each 15-minute block, divided by
+*your* people-per-staff ratio, rounded up. The app never suggests a ratio; with none
+entered the table stays empty. *Assumption:* on-site is the gate count (in minus out).
+
+**Consistency checks.** Flags, with the place and time, where the counts contradict
+themselves: a zone below zero; inner areas holding more people than the gates say are on
+site (beyond the ± band); a checkpoint where cumulative OUT has been more than 10% above
+cumulative IN for 15 minutes. They are prompts for a person to look, and never change a
+count.
+
+**Second forecaster (Holt, damped trend).** Smooths each zone's recent count and its
+trend, and lets the trend fade over the 15 minutes ahead instead of running it on in a
+straight line. It is recorded and scored exactly like the straight-line forecast, and
+both errors are shown on the dashboard; the straight line stays primary because it did
+better (see below).
+
+**Replay.** A slider on the report rebuilds the dashboard's numbers at any minute of the
+evening from the tap log.
+
+### Holt versus straight line
+
+Scored offline over three simulated evenings (every 2 minutes, every zone, 15 minutes
+ahead - the dashboard's own schedule; `src/lib/planning/backtest.test.ts`), with Holt's
+parameters fixed beforehand (α 0.5, β 0.2, φ 0.9) rather than tuned to the simulator:
+
+| Simulated evening (seed) | Forecasts | Straight line MAE | Holt MAE |
+|---|---|---|---|
+| 20261017 | 312 | 45.9 people | 61.2 people |
+| 1 | 312 | 46.1 people | 62.0 people |
+| 2 | 312 | 46.4 people | 61.7 people |
+
+Holt lost all three, so it is not the primary forecast. On the night both are scored
+live, and the dashboard shows the two errors side by side.
+
+### New data
+
+New collections, each with its own rules and nothing else changed:
+`trucks` (organizer), `serviceTimes` (anyone with the event id, written as their own
+device, soft-delete only, 1 s to 30 min), `forecastsHolt` (same rules as `forecasts`).
+Organizer inputs live in a `planning` map on the event document. The volunteer screen
+and the tap rules are byte-for-byte what they were at `demo-ready`.
+
+The service-timer screen is a lazily loaded page, so unlike the counting screen it is
+not in the offline precache: the volunteer opens the link once with signal (which the
+first sign-in needs anyway), after which it and every sample work offline.
+
+The demo simulator also adds three trucks, twelve timed customers each (60-180 s), the
+food-court zone and a 60% order share to the demo event, so the Planning section has
+something to show. It leaves the staffing ratio blank - type one in on the admin page.
+
+Checks: `npm test` (Erlang C against published tables, the band's accumulation and
+reset, queue, staffing, consistency, Holt), `node scripts/verify-planning-rules.mjs`,
+and `BASE=... COMPARE_BASE=<demo-ready url> node scripts/planning-check.mjs` in a
+browser.
+
 ---
 
 ## Known limitations
@@ -476,10 +579,11 @@ the screen.
 
 ## What is not built yet
 
-**Replay scrubber.** The time-series engine can rebuild the event at any past moment,
-but there is no control for dragging back through the evening. After 17 October.
+**Replay scrubber.** Built, on the report, behind the Planning features switch.
 
-**Miscounting detection.** Nothing flags a checkpoint whose counts look wrong -
+**Miscounting detection.** With planning on, the consistency checks catch counts that
+contradict themselves (a zone below zero, more out than in). Otherwise nothing flags a
+checkpoint whose counts look wrong -
 one volunteer tapping at half the rate of the gate beside them, say. Confidence and
 the silent-feeder warning cover *staleness* and *silence*; neither catches a
 checkpoint that is reporting steadily and wrongly. Spotting that, and resetting the

@@ -57,6 +57,16 @@ import {
   StatTile,
 } from '../components/sections'
 import type { ZoneAlert } from '../components/sections'
+import { ConsistencyList, ForecasterCompare } from '../components/Planning'
+import {
+  recordHoltForecast,
+  resolveHoltForecast,
+  useHoltForecasts,
+  usePlanningFlag,
+} from '../lib/planning/data'
+import { bands, checksFor } from '../lib/planning/model'
+import { holtForecast } from '../lib/planning/holt'
+import type { PlanningEvent } from '../lib/planning/types'
 
 const TREND_WINDOW_MIN = 10
 const SPARK_WINDOW_MIN = 60
@@ -101,6 +111,11 @@ export function Dashboard() {
   const [snooze, setSnooze] = useState<{ until: number; zoneIds: string[] } | null>(null)
   const [resetting, setResetting] = useState<string | null>(null)
 
+  // ---- planning layer: off unless the admin switch or ?planning=1 says so ----
+  const planningOn = usePlanningFlag(event as PlanningEvent | null)
+  const planning = useMemo(() => (event as PlanningEvent | null)?.planning ?? {}, [event])
+  const holt = useHoltForecasts(eventId, uid, planningOn)
+
   // ---- live numbers, cheap enough to recompute every second ---------------
   const occupancy = useMemo(
     () => computeOccupancy(zones, checkpoints, taps, resets, now),
@@ -140,6 +155,16 @@ export function Dashboard() {
     [checkpoints, taps, eventStart, chartNow],
   )
 
+  const planningBands = useMemo(
+    () => (planningOn ? bands(planning, zones, checkpoints, taps, resets, chartNow) : null),
+    [planningOn, planning, zones, checkpoints, taps, resets, chartNow],
+  )
+  const planningFlags = useMemo(
+    () =>
+      planningOn ? checksFor(planning, zones, checkpoints, taps, resets, eventStart, chartNow) : [],
+    [planningOn, planning, zones, checkpoints, taps, resets, eventStart, chartNow],
+  )
+
   const throughput = useMemo(
     () => checkpointThroughput(checkpoints, taps, chartNow - THROUGHPUT_WINDOW_MIN * MINUTE, chartNow),
     [checkpoints, taps, chartNow],
@@ -174,6 +199,7 @@ export function Dashboard() {
             dwellMin: dwellMinutes(current, arrivalRate.get(zone.id) ?? 0),
             confidence: zoneConfidence(zone.id, eventStart, resets, now),
             silent: silentFeeders(zone.id, checkpoints, lastTap, eventStart, now),
+            ...(planningBands ? { band: planningBands.zones.get(zone.id) ?? 0 } : {}),
           }
         })
         .sort(
@@ -192,11 +218,13 @@ export function Dashboard() {
       checkpoints,
       lastTap,
       now,
+      planningBands,
     ],
   )
 
   const accuracy = useMemo(() => accuracyOf(forecasts), [forecasts])
   const accuracyPct = useMemo(() => accuracyPctOf(zones, forecasts), [zones, forecasts])
+  const holtAccuracy = useMemo(() => accuracyOf(holt.forecasts), [holt.forecasts])
 
   const opsLog = useMemo(
     () =>
@@ -233,6 +261,19 @@ export function Dashboard() {
 
   useAlertChime(visibleAlerts.length, soundOn)
   useForecastLogging({ eventId, isAdmin, zoneStats, taps, now, zones, checkpoints, resets, forecasts, forecastsLoaded, chartTick })
+  useHoltLogging({
+    eventId,
+    enabled: planningOn && isAdmin,
+    zoneStats,
+    taps,
+    now,
+    zones,
+    checkpoints,
+    resets,
+    forecasts: holt.forecasts,
+    loaded: holt.loaded,
+    chartTick,
+  })
 
   if (loading) return <Screen title="Loading…" />
   if (notFound) return <Screen title="Event not found" />
@@ -282,7 +323,11 @@ export function Dashboard() {
       <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <StatTile
           label="Attendance so far"
-          value={attendance.toLocaleString()}
+          value={
+            planningBands
+              ? `${attendance.toLocaleString()} ± ${planningBands.attendance.toLocaleString()}`
+              : attendance.toLocaleString()
+          }
           sub="everyone who has come in"
           emphasis
         />
@@ -349,6 +394,24 @@ export function Dashboard() {
           redMs={RED_SILENCE_MS}
         />
       </Section>
+
+      {planningOn && (
+        <Section
+          title="Consistency checks"
+          note="Where the counts disagree with themselves. Informational only; nothing is corrected."
+        >
+          <ConsistencyList flags={planningFlags} />
+        </Section>
+      )}
+
+      {planningOn && (
+        <Section
+          title="Forecasters compared"
+          note="Both make a 15-minute forecast for every zone every 2 minutes, scored against what happened. The straight line stays primary: it beat Holt on all three simulated evenings."
+        >
+          <ForecasterCompare linear={accuracy} holt={holtAccuracy} />
+        </Section>
+      )}
 
       {openFlags.length > 0 && (
         <Section title="Unacknowledged flags">
@@ -590,4 +653,75 @@ function useAlertChime(alertCount: number, soundOn: boolean) {
       /* audio is a convenience, never a requirement */
     }
   }, [alertCount, soundOn])
+}
+
+/**
+ * The second forecaster's record, kept exactly like the first: one forecast per
+ * zone per interval, written before the outcome is known and scored after it.
+ * Planning layer only.
+ */
+function useHoltLogging({
+  eventId,
+  enabled,
+  zoneStats,
+  taps,
+  zones,
+  checkpoints,
+  resets,
+  forecasts,
+  loaded,
+  now,
+  chartTick,
+}: {
+  eventId: string | undefined
+  enabled: boolean
+  zoneStats: ZoneStats[]
+  taps: import('../types').Tap[]
+  zones: import('../types').Zone[]
+  checkpoints: import('../types').Checkpoint[]
+  resets: import('../types').Reset[]
+  forecasts: import('../types').Forecast[]
+  loaded: boolean
+  now: number
+  chartTick: number
+}) {
+  const loggedBucket = useRef<number | null>(null)
+  const resolving = useRef(new Set<string>())
+  const bucket = Math.floor(now / FORECAST_INTERVAL_MS)
+  const hasTaps = taps.some((t) => !t.undone)
+
+  useEffect(() => {
+    if (!eventId || !enabled || !hasTaps || !loaded || zoneStats.length === 0) return
+    if (loggedBucket.current === bucket) return
+    loggedBucket.current = bucket
+    const madeAtMs = bucket * FORECAST_INTERVAL_MS
+    const already = new Set(forecasts.map((f) => f.id))
+    for (const stats of zoneStats) {
+      if (already.has(forecastDocId(stats.zone.id, madeAtMs))) continue
+      const predicted = holtForecast(
+        stats.spark.map((p) => p.v),
+        FORECAST_HORIZON_MIN,
+      )
+      recordHoltForecast(eventId, stats.zone.id, madeAtMs, predicted).catch((e) => {
+        if ((e as { code?: string }).code !== 'permission-denied') {
+          console.error('Holt forecast not recorded', e)
+        }
+      })
+    }
+  }, [eventId, enabled, hasTaps, loaded, bucket, zoneStats, forecasts])
+
+  useEffect(() => {
+    if (!eventId || !enabled) return
+    for (const forecast of dueForResolution(forecasts, Date.now())) {
+      if (resolving.current.has(forecast.id)) continue
+      resolving.current.add(forecast.id)
+      const actual = computeOccupancy(zones, checkpoints, taps, resets, forecast.targetTime.toMillis()).get(
+        forecast.zoneId,
+      )
+      if (actual === undefined) continue
+      resolveHoltForecast(eventId, forecast.id, actual).catch((e) =>
+        console.error('Holt forecast not scored', e),
+      )
+    }
+  }, [eventId, enabled, forecasts, zones, checkpoints, taps, resets, chartTick])
 }

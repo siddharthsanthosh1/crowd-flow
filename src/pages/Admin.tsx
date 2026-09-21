@@ -38,6 +38,7 @@ import { imageToDataUrl } from '../lib/imageResize'
 import { SiteMap } from '../components/SiteMap'
 import type { Checkpoint, SuggestedAction, Zone } from '../types'
 import { Screen } from '../components/Screen'
+import { PlanningAdmin } from '../components/PlanningAdmin'
 
 const input =
   'w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-neutral-100'
@@ -201,6 +202,7 @@ export function AdminEvent() {
       <LinksSection eventId={eventId!} checkpoints={checkpoints} />
       <VendorLinksSection eventId={eventId!} zones={zones} />
       <SimulatorSection eventId={eventId!} uid={uid} event={event} zones={zones} checkpoints={checkpoints} />
+      <PlanningAdmin event={event} uid={uid} zones={zones} />
       <SecretSection eventId={eventId!} />
       <DuplicateSection eventId={eventId!} event={event} zones={zones} checkpoints={checkpoints} uid={uid} />
     </div>
